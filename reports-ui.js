@@ -95,7 +95,8 @@ drawReportCharts = function() {
     }
     const datasets = b.datasets.map((d,i) => ({...d,backgroundColor:b.kind==='horizontal'?(b.id==='rep-safety'?PAL.warn:PAL.teal):colors[i%colors.length]}));
     let cfg;
-    if (b.kind === 'donut') cfg = donutCfg(b.labels,b.datasets[0].data,colors);
+    if (b.kind === 'trajectory') cfg = lineCfg(b.labels,b.datasets.map((d,i)=>({...d,borderColor:colors[i],backgroundColor:colors[i]+'22',borderDash:i?[6,4]:[],fill:i===0,tension:0,spanGaps:false})),{animation:false,plugins:{legend:{display:true,position:'bottom'}}});
+    else if (b.kind === 'donut') cfg = donutCfg(b.labels,b.datasets[0].data,colors);
     else if (b.kind === 'stack') cfg = {type:'bar',data:{labels:b.labels,datasets},options:baseOpts({animation:false,plugins:{legend:{display:true,position:'bottom'}},scales:{x:{stacked:true,grid:{display:false}},y:{stacked:true,beginAtZero:true}}})};
     else if (b.kind === 'objectives') {
       const labels = b.labels.map(label => {

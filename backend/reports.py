@@ -83,8 +83,6 @@ async def make_report(st, request, company):
         if entity and not scope_locations(st,ts).issubset(loc_ids):
             continue
         by,ty = t.get('baseYear',year),t.get('targetYear',year)
-        if by > year:
-            continue
         base = compute(st,t['metricId'],by,ts,None,s2)
         if base is None:
             base = t.get('baseValue')
@@ -92,7 +90,20 @@ async def make_report(st, request, company):
         expected = min(100,max(0,(year-by)/(ty-by)*100)) if ty > by else 100
         progress = None if cur is None or base is None or goal is None else ((cur-base)/(goal-base)*100 if goal != base else (100 if cur == goal else 0))
         status = 'Sin datos' if progress is None else 'On Track' if progress >= expected else 'At Risk' if progress >= expected-15 else 'Off Track'
-        targets.append(dict(metricId=t['metricId'],name=t.get('name',t['metricId']),base=base,current=cur,goal=goal,unit=t.get('unit',''),status=status,progress=progress,expected=expected,area=t.get('area',''),targetYear=ty))
+        targets.append(dict(metricId=t['metricId'],name=t.get('name',t['metricId']),base=base,current=cur,goal=goal,unit=t.get('unit',''),status=status,progress=progress,expected=expected,area=t.get('area',''),targetYear=ty,baseYear=by,scope=ts))
+    def trend_figures(rows, prefix):
+        blocks = []
+        for i,t in enumerate(rows):
+            target_locs = scope_locations(st,t['scope'])
+            available = [r['y'] for r in st['measures']+st['actuals'] if r['loc'] in target_locs]
+            timeline = list(range(min([t['baseYear']]+available),max([t['targetYear'],t['baseYear']]+available)+1))
+            trajectory = [None if y < t['baseYear'] or y > t['targetYear'] or t['base'] is None or t['goal'] is None
+                else t['base']+(t['goal']-t['base'])*(y-t['baseYear'])/max(1,t['targetYear']-t['baseYear']) for y in timeline]
+            blocks.append(chart(prefix+'-'+str(i),t['name']+' · '+t['unit']+f' · Base {t["baseYear"]} → meta {t["targetYear"]}',
+                'trajectory',timeline,[
+                    {'label':'Real','data':[compute(st,t['metricId'],y,t['scope'],None,s2) for y in timeline]},
+                    {'label':'Trayectoria objetivo','data':trajectory}]))
+        return blocks
     target_topics = {
         'climate':('ENV-GHG-',), 'energy':('ENV-ENERGY',),
         'water':('ENV-WATER-',), 'waste':('ENV-WASTE',), 'land':('ENV-LAND',),
@@ -104,17 +115,7 @@ async def make_report(st, request, company):
         rows = [t for t in targets if t['metricId'].startswith(target_topics[topic])]
         if not rows:
             return [p('Sin objetivos configurados para esta sección y alcance.')]
-        blocks = [p('Ambiciones y objetivos: avance desde la línea base hacia la meta (100%). El avance esperado supone una trayectoria lineal hasta el año objetivo. Los objetivos sin mediciones se indican como sin datos.')]
-        # Small groups keep long objective names legible and each figure on one PDF page.
-        for start in range(0,len(rows),4):
-            group = rows[start:start+4]
-            blocks.append(chart('objectives-'+topic+'-'+str(start),
-                f'Ambiciones y objetivos · {TITLES[topic]} · {year} (%)',
-                'objectives',
-                [t['name']+' · '+str(t['targetYear'])+(' · sin datos' if t['progress'] is None else '') for t in group],
-                [{'label':'Avance real (%)','data':[t['progress'] for t in group]},
-                 {'label':'Avance esperado (%)','data':[t['expected'] for t in group]}]))
-        return blocks
+        return [p('Ambiciones y objetivos: serie histórica completa y trayectoria lineal hacia la meta, independientes del año del reporte. Los años sin mediciones quedan sin puntos reales.')]+trend_figures(rows,'objectives-'+topic)
     sections = []
     def add(key,blocks):
         if key in selected:
@@ -155,7 +156,7 @@ async def make_report(st, request, company):
             section['blocks'].extend(target_figures(section['id']))
     areas = sorted({t['area'] for t in targets})
     progresses = [[t['progress'] for t in targets if t['area'] == a and t['progress'] is not None] for a in areas]
-    add('targets',[p(f'Se identificaron {len(targets)} objetivos aplicables al alcance. El avance se calcula al cierre de {year}, respecto de la línea base y la meta de cada objetivo.'),{'type':'table','id':'tgt','rows':targets},chart('targets',f'Avance de objetivos por área ESG, {year} (%)','bar',areas,[{'label':'Avance (%)','data':[sum(v)/len(v) if v else None for v in progresses]}])])
+    add('targets',[p(f'Se presentan {len(targets)} objetivos del alcance seleccionado con todos los años disponibles y su trayectoria hasta la meta, independientemente del ejercicio del reporte. La línea real utiliza sólo mediciones cargadas; la trayectoria objetivo es una referencia lineal entre la base y la meta.')]+trend_figures(targets,'ambitions'))
     worst = sorted([t for t in targets if t['progress'] is not None and t['progress'] < t['expected']],key=lambda t:t['progress']-t['expected'])[:3]
     improvement = [p('A partir de las brechas observadas se proponen las siguientes líneas de revisión para el próximo ciclo:')]
     improvement += [p(f'{i+1}. {t["name"]}: avance de {number(t["progress"])}% frente a {number(t["expected"])}% esperado. Revisar acciones, responsables y plazos.') for i,t in enumerate(worst)]

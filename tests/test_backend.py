@@ -74,12 +74,14 @@ class DemoTests(unittest.TestCase):
         for target in self.state['targets']:
             target['loc'] = 'GRP'
         report = asyncio.run(make_report(self.state, {'year':2025,'scope':'ALL'}, 'Test'))
-        rows = next(b['rows'] for s in report['sections'] for b in s['blocks'] if b['type']=='table')
+        rows = next(s['blocks'][1:] for s in report['sections'] if s['id']=='targets')
         self.assertEqual(len(rows),len(self.state['targets']))
-        self.assertTrue(all(t['current'] is not None for t in rows))
-        self.assertTrue(any(b.get('kind')=='objectives' for s in report['sections'] for b in s['blocks']))
+        self.assertTrue(all(any(v is not None for v in t['datasets'][0]['data']) for t in rows))
+        older = asyncio.run(make_report(self.state, {'year':2020,'scope':'ALL'}, 'Test'))
+        self.assertEqual(rows,next(s['blocks'][1:] for s in older['sections'] if s['id']=='targets'))
+        self.assertTrue(any(b.get('kind')=='trajectory' for s in report['sections'] for b in s['blocks']))
         narrow = asyncio.run(make_report(self.state, {'year':2025,'scope':'AR-BUE'}, 'Test'))
-        self.assertFalse(any(b.get('kind')=='objectives' for s in narrow['sections'] for b in s['blocks']))
+        self.assertFalse(any(b.get('kind')=='trajectory' for s in narrow['sections'] for b in s['blocks']))
 
     def test_objectives_follow_selected_report_sections(self):
         self.login(); self.assertEqual(self.save().status_code, 200)
@@ -88,18 +90,19 @@ class DemoTests(unittest.TestCase):
         self.assertEqual(response.status_code,200,response.text)
         report = response.json()
         self.assertEqual([s['id'] for s in report['sections']],['env','gov'])
-        charts = [b for s in report['sections'] for b in s['blocks'] if b.get('kind')=='objectives']
+        charts = [b for s in report['sections'] for b in s['blocks'] if b.get('kind')=='trajectory']
         self.assertTrue(any('energy' in b['id'] for b in charts))
         self.assertTrue(any('gov' in b['id'] for b in charts))
         self.assertFalse(any('climate' in b['id'] for b in charts))
         for chart in charts:
-            self.assertLessEqual(len(chart['labels']),4)
+            self.assertIn(2026, chart['labels'])
+            self.assertGreaterEqual(chart['labels'][-1],2027)
             self.assertEqual(len(chart['datasets']),2)
         self.state['targets'] = []
         self.assertEqual(self.save(1).status_code,200)
         empty = self.client.post('/api/reports',headers=self.headers,
             json={'year':2025,'scope':'ALL','sections':['energy']}).json()
-        self.assertFalse(any(b.get('kind')=='objectives' for s in empty['sections'] for b in s['blocks']))
+        self.assertFalse(any(b.get('kind')=='trajectory' for s in empty['sections'] for b in s['blocks']))
 
     def test_scope2_does_not_double_count(self):
         validate_state(self.state)
