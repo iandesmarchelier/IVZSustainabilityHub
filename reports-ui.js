@@ -128,11 +128,22 @@ downloadReport = async function() {
     const buttons = doc.querySelectorAll('.no-print');
     buttons.forEach(b => b.style.display='none');
     doc.classList.add('exporting');
+    // html2canvas captures <canvas> elements at their raw pixel-buffer size, not their CSS
+    // size. Chart.js normally sizes that buffer with devicePixelRatio for retina sharpness,
+    // so on any screen with devicePixelRatio > 1 the exported chart is wider/taller than its
+    // box and gets cropped by the page edge. Redraw at ratio 1 (buffer == CSS size) only for
+    // the export, then restore normal on-screen rendering afterwards.
+    Object.values(ui.charts).forEach(c => { c.options.devicePixelRatio = 1; c.resize(); });
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
     try {
       await html2pdf().set({margin:12,filename:'IVZ_Sustainability_Report_'+appState.report.meta.year+'.pdf',
         image:{type:'jpeg',quality:.98},html2canvas:{scale:2,useCORS:true,scrollY:0},
         jsPDF:{unit:'mm',format:'a4',orientation:'portrait'},pagebreak:{mode:['css','legacy'],avoid:['.rep-fig','h2','h3','tr']}}).from(doc).save();
-    } finally {buttons.forEach(b => b.style.display=''); doc.classList.remove('exporting');}
+    } finally {
+      buttons.forEach(b => b.style.display='');
+      doc.classList.remove('exporting');
+      drawReportCharts();
+    }
   } catch(e) {toast(e.message,'bad');}
 };
 
