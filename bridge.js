@@ -84,7 +84,7 @@ async function boot() {
   const state = data.state || buildEmptyState();
   const energyMigrated = migrateEnergyUnit(state);
   init(state);
-  document.querySelector('#btn-user').textContent = data.username + ' · ' + data.company;
+  document.querySelector('#btn-user').textContent = 'Sistema Tenant - IVZ Sustainability Hub';
   // One general template in this demo. Other frameworks are future work.
   appState.integrations.forEach(i => { if (i.id !== 'INT-XLS') { i.status = 'Not configured'; i.records = 0; i.lastSync = '—'; } });
   serverRevision = data.revision;
