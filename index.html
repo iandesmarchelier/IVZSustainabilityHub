@@ -439,7 +439,7 @@ const METRICS = [
   { id: "ENV-GHG-S3", name: "Scope 3 emissions", area: "Environmental", topic: "Clima y carbono", type: "Calculada", unit: "tCO2e", agg: "SUM", frameworks: ["ESRS", "GRI", "ISSB"], from: "measure", measure: "CO2E", filter: { ghgScope: "Scope 3" }, lowerIsBetter: true, formula: "SUM(CO2e WHERE Scope = 3)" },
   { id: "ENV-GHG-AVOID", name: "Avoided emissions", area: "Environmental", topic: "Clima y carbono", type: "Calculada", unit: "tCO2e", agg: "SUM", frameworks: ["Custom"], from: "measure", measure: "CO2E_AVOIDED", filter: {}, lowerIsBetter: false, formula: "SUM(Avoided CO2e)" },
   { id: "ENV-GHG-INT", name: "GHG emissions intensity", area: "Environmental", topic: "Clima y carbono", type: "Calculada", unit: "tCO2e/M USD", agg: "RATIO", frameworks: ["ESRS", "ISSB"], from: "formula", num: "ENV-GHG-TOT", den: "ECO-REV", op: "/", scale: 1, lowerIsBetter: true, formula: "Total GHG emissions / Net revenue" },
-  { id: "ENV-ENERGY", name: "Energy consumption", area: "Environmental", topic: "Energía", type: "Calculada", unit: "GWh", agg: "SUM", frameworks: ["ESRS", "GRI"], from: "measure", measure: "ENERGY", filter: {}, scale: 1e-6, lowerIsBetter: true, formula: "SUM(Energy consumption) / 1.000.000" },
+  { id: "ENV-ENERGY", name: "Energy consumption", area: "Environmental", topic: "Energía", type: "Calculada", unit: "kWh", agg: "SUM", frameworks: ["ESRS", "GRI"], from: "measure", measure: "ENERGY", filter: {}, lowerIsBetter: true, formula: "SUM(Energy consumption)" },
   { id: "ENV-ENERGY-REN", name: "Renewable energy share", area: "Environmental", topic: "Energía", type: "Calculada", unit: "%", agg: "SHARE", frameworks: ["ESRS", "GRI"], from: "share", measure: "ENERGY", filter: { energySource: ["PPA renovable", "Solar on-site"] }, lowerIsBetter: false, formula: "Energía renovable / Energía total × 100" },
   { id: "ENV-WATER-CONS", name: "Water consumption", area: "Environmental", topic: "Agua", type: "Calculada", unit: "m³", agg: "SUM", frameworks: ["ESRS", "GRI"], from: "measure", measure: "WATER", filter: { waterFlow: "Consumo" }, lowerIsBetter: true, formula: "SUM(Water WHERE Flow = 'Consumo')" },
   { id: "ENV-WATER-WD", name: "Water withdrawal", area: "Environmental", topic: "Agua", type: "Calculada", unit: "m³", agg: "SUM", frameworks: ["ESRS", "GRI"], from: "measure", measure: "WATER", filter: { waterFlow: "Extracción" }, lowerIsBetter: true, formula: "SUM(Water WHERE Flow = 'Extracción')" },
@@ -839,10 +839,11 @@ function locDescendants(st, id) {
 }
 /* Ubicaciones operativas incluidas en el filtro actual */
 function scopeLocs(st, locId) {
+  if (!locId || locId === "ALL" || (locId === "GRP" && !st.masterData.locations.some(l => l.id === "GRP"))) return st.masterData.locations.filter(l => l.operable).map(l => l.id);
   const ids = locDescendants(st, locId || "GRP");
   return st.masterData.locations.filter(l => ids.includes(l.id) && l.operable).map(l => l.id);
 }
-function locName(id) { const l = appState.masterData.locations.find(x => x.id === id); return l ? l.name : id; }
+function locName(id) { const l = appState.masterData.locations.find(x => x.id === id); return l ? l.name : (id === "GRP" || id === "ALL" ? "Todas las ubicaciones" : id); }
 
 /* Traduce el filtro de período a un predicado de mes */
 function periodMonths(period) {
@@ -1025,11 +1026,12 @@ function dimValues(key) {
 function dataQuality() {
   const st = appState;
   const total = st.measures.length + st.actuals.length;
+  if (!total) return {total: 0, completeness: null, validity: null, consistency: null, traceability: null, score: null};
   const invalid = st.measures.filter(r => r.value === null || isNaN(r.value) || r.value < 0).length
     + st.actuals.filter(r => r.value === null || isNaN(r.value)).length;
-  const expectedCells = OPS.length * CONFIG.YEARS.length;
+  const expectedCells = appState.masterData.locations.filter(l => l.operable).length * CONFIG.YEARS.length;
   const covered = new Set(st.measures.filter(r => r.measure === "CO2E").map(r => r.loc + "-" + r.y)).size;
-  const completeness = Math.min(100, covered / expectedCells * 100);
+  const completeness = Math.min(100, covered / Math.max(1, expectedCells) * 100);
   const validity = 100 - invalid / Math.max(1, total) * 100;
   const missingUnits = st.measures.filter(r => !r.unit).length + st.actuals.filter(r => !r.unit).length;
   const consistency = Math.max(0, 100 - missingUnits / Math.max(1, total) * 100 - 8.6);
@@ -1168,7 +1170,7 @@ function renderFilters() {
   const spec = FILTER_SPEC[ui.route] || [];
   if (!spec.length) { $("#filters").style.display = "none"; return; }
   $("#filters").style.display = "flex";
-  const locOpts = appState.masterData.locations.map(l =>
+  const locOpts = '<option value="ALL"' + (filters.loc === 'ALL' || !appState.masterData.locations.some(l => l.id === filters.loc) ? ' selected' : '') + '>Todas las ubicaciones</option>' + appState.masterData.locations.map(l =>
     '<option value="' + l.id + '"' + (filters.loc === l.id ? " selected" : "") + ">" + "  ".repeat(l.parent ? (l.parent === "GRP" ? 1 : 2) : 0) + esc(l.name) + "</option>").join("");
   const parts = { };
   parts.year = '<span class="flabel"><i data-lucide="calendar" style="width:13px;height:13px"></i>Año</span><select class="sel" data-f="year">' +
@@ -1398,7 +1400,7 @@ function viewDesempeno(el) {
     '<div class="k-foot"><span class="delta ' + (yoy === null ? "flat" : ((m.lowerIsBetter ? yoy < 0 : yoy > 0) ? "good" : "bad")) + '">' + pct(yoy) + " interanual</span></div></div>" +
     statCard("Máximo por ubicación", byLoc.length ? fmtSmart(byLoc[0].v, m.unit) + " " + unitSmart(byLoc[0].v, m.unit) : "—", byLoc.length ? byLoc[0].loc.name : "", "trending-up") +
     statCard("Mínimo por ubicación", byLoc.length ? fmtSmart(byLoc[byLoc.length - 1].v, m.unit) + " " + unitSmart(byLoc[byLoc.length - 1].v, m.unit) : "—", byLoc.length ? byLoc[byLoc.length - 1].loc.name : "", "trending-down") +
-    statCard("Ubicaciones con datos", fmt(byLoc.length), "de " + OPS.length + " operativas", "map-pin") + "</div>" +
+    statCard("Ubicaciones con datos", fmt(byLoc.length), "de " + appState.masterData.locations.filter(l => l.operable).length + " operativas", "map-pin") + "</div>" +
 
     '<div class="grid g2" style="margin-bottom:16px">' +
     '<div class="card"><div class="card-h"><h3>Evolución ' + CONFIG.YEARS[0] + "–" + CONFIG.YEARS[CONFIG.YEARS.length - 1] + '</h3></div><div class="card-b"><div class="chart-box"><canvas id="ch-d1"></canvas></div></div></div>' +
@@ -1420,8 +1422,8 @@ function viewDesempeno(el) {
   let dLabels, dValues;
   if (ui.dyn.dim === "month") { dLabels = byMonth.map(x => x.name); dValues = byMonth.map(x => x.v); }
   else if (ui.dyn.dim === "country") {
-    const cs = Array.from(new Set(OPS.map(l => l.countryName)));
-    dLabels = cs; dValues = cs.map(c => computeMetric(appState, m.id, ctx({ locs: OPS.filter(l => l.countryName === c).map(l => l.id) })));
+    const cs = Array.from(new Set(appState.masterData.locations.filter(l => l.operable).map(l => l.countryName)));
+    dLabels = cs; dValues = cs.map(c => computeMetric(appState, m.id, ctx({ locs: appState.masterData.locations.filter(l => l.operable).filter(l => l.countryName === c).map(l => l.id) })));
   } else if (ui.dyn.dim === "entity") {
     const es = appState.masterData.legalEntities;
     dLabels = es.map(e => e.name); dValues = es.map(e => computeMetric(appState, m.id, ctx({ entity: e.id })));
@@ -1945,6 +1947,10 @@ function exportCSV(rows, filename) {
 /* Panel de calidad de datos */
 function openQualityPanel() {
   const q = dataQuality();
+  if (!q.total) {
+    modal({title: "Calidad de datos", icon: "gauge", body: '<h3>Sin datos para evaluar</h3><p class="muted">0 registros. La calidad se calculará cuando cargues información.</p>', footer: '<button class="btn pri" data-close>Cerrar</button>'});
+    return;
+  }
   const bar = (label, v) => '<div style="margin-bottom:12px"><div class="flexrow" style="font-size:12.5px;margin-bottom:5px"><span>' + label + '</span><b class="right">' + fmt(v, 0) + "%</b></div>" +
     '<div class="pbar ' + (v > 95 ? "" : v > 88 ? "warn" : "bad") + '"><i style="width:' + v + '%"></i></div></div>';
   modal({
@@ -2119,8 +2125,13 @@ function viewMaestros(el) {
       '<div class="card"><div class="card-h"><h3>Emisiones por nodo</h3><span class="hint">' + filters.year + '</span></div><div class="card-b"><div class="chart-box lg"><canvas id="ch-org"></canvas></div></div></div></div>';
     drawTree();
     $("#md-add-node").onclick = openNodeModal;
-    const byLoc = OPS.map(l => ({ k: l.name, v: ghgSum({}, { locs: [l.id] }) })).sort((a, b) => b.v - a.v);
-    mkChart("ch-org", barCfg(byLoc.map(x => x.k), [{ label: "tCO2e", data: byLoc.map(x => x.v) }], {}, true));
+    const byLoc = appState.masterData.locations.filter(l => l.operable).map(l => ({ k: l.name, v: ghgSum({}, { locs: [l.id] }) })).sort((a, b) => b.v - a.v);
+    if (!byLoc.length) {
+      $("#ch-org").parentElement.innerHTML = '<p class="muted">Sin ubicaciones configuradas.</p>';
+      $("#md-tree").textContent = 'Sin ubicaciones. Creá tu primer nodo con el botón Nodo.';
+    } else {
+      mkChart("ch-org", barCfg(byLoc.map(x => x.k), [{ label: "tCO2e", data: byLoc.map(x => x.v) }], {}, true));
+    }
   } else if (tab === "loc") {
     dataTable("md-body", [
       { k: "id", n: "ID_BUSINESS_LOC", get: r => '<span class="mono">' + esc(r.id) + "</span>" },
@@ -2209,10 +2220,10 @@ function drawTree() {
 function openNodeModal() {
   modal({
     title: "Nuevo nodo de estructura", icon: "network",
-    body: '<div class="frow"><div class="field"><label>ID_BUSINESS_LOC</label><input class="inp mono" id="n-id" placeholder="AR-MDP"></div>' +
-      '<div class="field"><label>NAME_BUSINESS_LOC</label><input class="inp" id="n-name" placeholder="Planta Mar del Plata"></div></div>' +
-      '<div class="frow"><div class="field"><label>Nodo padre</label><select class="sel" id="n-parent">' + appState.masterData.locations.filter(l => !l.operable).map(l => '<option value="' + l.id + '">' + esc(l.name) + "</option>").join("") + "</select></div>" +
-      '<div class="field"><label>Tipo</label><select class="sel" id="n-type"><option>Planta</option><option>Logística</option><option>Oficina</option><option>País</option></select></div></div>' +
+    body: '<div class="frow"><div class="field"><label>ID_BUSINESS_LOC</label><input class="inp mono" id="n-id" placeholder="ID de tu ubicación"></div>' +
+      '<div class="field"><label>NAME_BUSINESS_LOC</label><input class="inp" id="n-name" placeholder="Nombre de tu ubicación"></div></div>' +
+      '<div class="frow"><div class="field"><label>Nodo padre</label><select class="sel" id="n-parent"><option value="">Sin padre (nodo raíz)</option>' + appState.masterData.locations.filter(l => !l.operable).map(l => '<option value="' + l.id + '">' + esc(l.name) + "</option>").join("") + "</select></div>" +
+      '<div class="field"><label>Tipo</label><select class="sel" id="n-type"><option>Planta</option><option>Logística</option><option>Oficina</option><option>País</option><option>Grupo</option></select></div></div>' +
       '<div class="frow"><div class="field"><label>Entidad legal</label><select class="sel" id="n-ent">' + appState.masterData.legalEntities.map(e => '<option value="' + e.id + '">' + esc(e.name) + "</option>").join("") + "</select></div>" +
       '<div class="field"><label>VALID_FROM</label><input class="inp" id="n-vf" value="2026-01-01"></div></div>',
     footer: '<button class="btn" data-close>Cancelar</button><button class="btn pri" id="n-save">Crear nodo</button>',
@@ -2221,8 +2232,8 @@ function openNodeModal() {
       if (!id || !name) { toast("Completá ID y nombre.", "warn"); return; }
       if (appState.masterData.locations.find(l => l.id === id)) { toast("Ya existe un nodo con ese ID.", "bad"); return; }
       const parent = $("#n-parent", w).value;
-      const pn = appState.masterData.locations.find(l => l.id === parent);
-      appState.masterData.locations.push({ id, name, parent, type: $("#n-type", w).value, country: pn.country, countryName: pn.countryName, entity: $("#n-ent", w).value, validFrom: $("#n-vf", w).value, operable: $("#n-type", w).value !== "País" });
+      const pn = appState.masterData.locations.find(l => l.id === parent) || {};
+      appState.masterData.locations.push({ id, name, parent: parent || null, type: $("#n-type", w).value, country: pn.country || "", countryName: pn.countryName || "", entity: $("#n-ent", w).value, validFrom: $("#n-vf", w).value, operable: !["País", "Grupo"].includes($("#n-type", w).value) });
       audit("Master data updated", "Nodo creado: " + name + " (" + id + ")", "network");
       closeModal(); toast("Nodo creado en la estructura organizativa"); render();
     }
@@ -2726,7 +2737,7 @@ function commitImport() {
         const ex = appState.masterData.locations.find(l => l.id === id);
         const parent = g("parent") ? String(g("parent")).trim().toUpperCase() : "GRP";
         const rec = {
-          id, name: String(g("name") || id), parent: appState.masterData.locations.find(l => l.id === parent) ? parent : "GRP",
+          id, name: String(g("name") || id), parent: appState.masterData.locations.find(l => l.id === parent) ? parent : null,
           type: "Planta", country: g("countryCode") || "", countryName: ({ AR: "Argentina", UY: "Uruguay", BR: "Brasil" })[g("countryCode")] || String(g("countryCode") || "—"),
           entity: g("legalEntity") || "LE-100", validFrom: String(g("validFrom") || "2026-01-01").slice(0, 10), operable: true, employees: null
         };
@@ -2922,7 +2933,7 @@ function viewReportes(el) {
     '<div class="grid g3" style="margin-bottom:16px">' +
     statCard("Métricas disponibles", fmt(appState.metrics.length), "en el catálogo ESG", "ruler") +
     statCard("Registros base", fmt(q.total), "medidas y datos reales", "database") +
-    statCard("Calidad de datos", fmt(q.score, 0) + "%", "score consolidado", "gauge") + "</div>" +
+    statCard("Calidad de datos", q.total ? fmt(q.score, 0) + "%" : "Sin datos", "score consolidado", "gauge") + "</div>" +
 
     '<div class="grid g2">' +
     '<div class="card"><div class="card-h"><h3>Reportes de la sesión</h3></div><div class="card-b flush" id="r-list"></div></div>' +
@@ -2942,7 +2953,7 @@ function viewReportes(el) {
 /* ---------- WIZARD DEL GENERADOR ---------- */
 let RW = null;
 function openReportWizard() {
-  RW = { step: 1, year: CONFIG.CURRENT_YEAR, scope: "GRP", template: "gen", sections: REPORT_SECTIONS.map(s => ({ ...s })) };
+  RW = { step: 1, year: filters.year, scope: "ALL", scopeKind: "L", s2: filters.s2, template: "gen", sections: REPORT_SECTIONS.map(s => ({ ...s })) };
   drawReportWizard();
 }
 function drawReportWizard() {
@@ -2951,18 +2962,19 @@ function drawReportWizard() {
   let body = "";
   if (RW.step === 1) {
     body = '<p class="muted" style="margin-top:0">Seleccioná el ejercicio a reportar. Todos los valores del borrador se calculan sobre ese período.</p>' +
-      '<div class="grid g4">' + CONFIG.YEARS.slice().reverse().map(y =>
+      '<div class="grid g4">' + Array.from(new Set([...CONFIG.YEARS, ...appState.measures.map(r => r.y), ...appState.actuals.map(r => r.y)])).sort((a,b) => b-a).map(y =>
         '<div class="card" data-ry="' + y + '" style="cursor:pointer;' + (RW.year === y ? "border-color:var(--accent);background:var(--accent-soft)" : "") + '"><div class="card-b" style="text-align:center">' +
-        '<div style="font-size:24px;font-weight:600">' + y + '</div><div class="muted" style="font-size:12px">' + fmtSmart(computeMetric(appState, "ENV-GHG-TOT", { year: y, period: "FY", loc: "GRP", s2: filters.s2 }), "tCO2e") + " MtCO2e</div></div></div>").join("") + "</div>";
+        '<div style="font-size:24px;font-weight:600">' + y + '</div><div class="muted" style="font-size:12px">' + n1(computeMetric(appState, "ENV-GHG-TOT", { year: y, period: "FY", loc: "ALL", s2: RW.s2 }), "tCO2e") + "</div></div></div>").join("") + "</div>";
   } else if (RW.step === 2) {
     body = '<p class="muted" style="margin-top:0">Definí el perímetro de consolidación del reporte.</p>' +
       '<div class="field"><label>Grupo completo, entidad legal o ubicación</label><select class="sel" id="rw-scope" style="width:100%">' +
+      '<option value="L:ALL"' + (RW.scope === 'ALL' ? ' selected' : '') + '>Todas las ubicaciones</option>' +
       '<optgroup label="Grupo">' + appState.masterData.locations.filter(l => !l.parent).map(l => '<option value="L:' + l.id + '"' + (RW.scope === l.id ? " selected" : "") + ">" + esc(l.name) + " (grupo completo)</option>").join("") + "</optgroup>" +
       '<optgroup label="Entidad legal">' + appState.masterData.legalEntities.map(e => '<option value="E:' + e.id + '"' + (RW.scope === e.id ? " selected" : "") + ">" + esc(e.name) + "</option>").join("") + "</optgroup>" +
-      '<optgroup label="Ubicación">' + appState.masterData.locations.filter(l => l.parent).map(l => '<option value="L:' + l.id + '"' + (RW.scope === l.id ? " selected" : "") + ">" + esc(l.name) + "</option>").join("") + "</optgroup>" +
+      '<optgroup label="Ubicación">' + appState.masterData.locations.filter(l => l.parent || l.operable).map(l => '<option value="L:' + esc(l.id) + '"' + (RW.scopeKind === 'L' && RW.scope === l.id ? " selected" : "") + ">" + esc(l.name) + "</option>").join("") + "</optgroup>" +
       "</select></div>";
   } else if (RW.step === 3) {
-    body = '<div class="grid g3">' + REPORT_TEMPLATES.map(t =>
+    body = '<div class="grid g3">' + REPORT_TEMPLATES.filter(t => t.id === 'gen').map(t =>
       '<div class="card" data-rt="' + t.id + '" style="cursor:pointer;' + (RW.template === t.id ? "border-color:var(--accent);background:var(--accent-soft)" : "") + '">' +
       '<div class="card-b"><div class="k-ico" style="margin-bottom:9px"><i data-lucide="file-text"></i></div><b style="font-size:13px">' + t.name + '</b>' +
       '<p class="muted" style="margin:5px 0 0;font-size:12px">' + t.desc + "</p></div></div>").join("") + "</div>";
@@ -2973,7 +2985,7 @@ function drawReportWizard() {
   }
   modal({
     title: "Generar reporte ESG", icon: "wand-2", size: "mid",
-    badge: '<span class="badge ai">AI</span><span class="badge warn">Demo</span>',
+    badge: '<span class="badge">ESG General</span>',
     body: '<div class="steps">' + steps + "</div>" + body,
     footer: (RW.step > 1 ? '<button class="btn" id="rw-back">Atrás</button>' : '<button class="btn" data-close>Cancelar</button>') +
       '<button class="btn pri" id="rw-next">' + (RW.step === 4 ? '<i data-lucide="sparkles"></i> Generar borrador' : "Continuar") + "</button>",
@@ -2985,6 +2997,7 @@ function drawReportWizard() {
       $("#rw-next", w).onclick = () => {
         if (RW.step === 2) { const v = $("#rw-scope", w).value; RW.scopeKind = v[0]; RW.scope = v.slice(2); }
         if (RW.step < 4) { RW.step++; drawReportWizard(); return; }
+        if (!RW.sections.some(s => s.on)) { toast('Elegí al menos una sección.', 'warn'); return; }
         runAiGeneration();
       };
     }
@@ -3044,7 +3057,7 @@ function buildReport(rw) {
     id: "exec", title: "1. Executive Summary", blocks: [
       P("Durante " + rw.year + ", las emisiones totales de GEI de " + scopeName + " alcanzaron " + n1(tot, "tCO2e") + ", representando " + dirWord(rYoY(rw, "ENV-GHG-TOT")) + " respecto del período anterior. El inventario se elabora conforme al GHG Protocol Corporate Standard y a la norma ISO 14064-1, con un enfoque de consolidación por control operativo."),
       P("El alcance 3 concentra " + fmt(s3 / (tot || 1) * 100, 1) + "% del inventario, lo que confirma que la mayor parte del impacto climático de la organización se origina en su cadena de valor. Las emisiones directas (alcance 1) totalizaron " + n1(s1, "tCO2e") + " y las asociadas a la energía adquirida (alcance 2, " + filters.s2.toLowerCase() + ") " + n1(s2, "tCO2e") + "."),
-      P("En materia de energía, el consumo del período fue de " + n1(rv(rw, "ENV-ENERGY"), "GWh") + ", con una participación renovable de " + fmt(rv(rw, "ENV-ENERGY-REN"), 1) + "%. El consumo de agua alcanzó " + n1(rv(rw, "ENV-WATER-CONS"), "m³") + " y los residuos generados " + n1(rv(rw, "ENV-WASTE"), "t") + "."),
+      P("En materia de energía, el consumo del período fue de " + n1(rv(rw, "ENV-ENERGY"), "kWh") + ", con una participación renovable de " + fmt(rv(rw, "ENV-ENERGY-REN"), 1) + "%. El consumo de agua alcanzó " + n1(rv(rw, "ENV-WATER-CONS"), "m³") + " y los residuos generados " + n1(rv(rw, "ENV-WASTE"), "t") + "."),
       P("En la dimensión social, la organización cerró el ejercicio con " + fmt(rv(rw, "SOC-EMP")) + " personas empleadas, " + fmt(rv(rw, "SOC-WOM-MGMT"), 1) + "% de mujeres en puestos de gestión y " + fmt(rv(rw, "SOC-INJ")) + " accidentes registrables. En gobernanza se registraron " + fmt(rv(rw, "GOV-CORR")) + " incidentes de corrupción confirmados, con " + fmt(rv(rw, "GOV-ANTICORR"), 0) + "% de la plantilla formada en políticas anticorrupción."),
       C("rep-exec", "Evolución de las emisiones totales de GEI por alcance, " + CONFIG.YEARS[0] + "–" + CONFIG.YEARS[CONFIG.YEARS.length - 1] + " (tCO2e)", "stack")
     ]
@@ -3052,7 +3065,7 @@ function buildReport(rw) {
 
   if (on("intro")) sections.push({
     id: "intro", title: "2. Introduction / Reporting Scope", blocks: [
-      P("Este reporte cubre el ejercicio " + rw.year + " y comprende el perímetro de " + scopeName + ", integrado por " + fmt(scopeLocs(appState, rw.scopeKind === "E" ? "GRP" : rw.scope).length) + " ubicaciones operativas en " + Array.from(new Set(OPS.map(l => l.countryName))).join(", ") + ". La consolidación se realiza bajo el enfoque de control operativo y utiliza los potenciales de calentamiento global del IPCC AR6 a 100 años."),
+      P("Este reporte cubre el ejercicio " + rw.year + " y comprende el perímetro de " + scopeName + ", integrado por " + fmt(scopeLocs(appState, rw.scopeKind === "E" ? "GRP" : rw.scope).length) + " ubicaciones operativas en " + Array.from(new Set(appState.masterData.locations.filter(l => l.operable).map(l => l.countryName))).join(", ") + ". La consolidación se realiza bajo el enfoque de control operativo y utiliza los potenciales de calentamiento global del IPCC AR6 a 100 años."),
       P("La información proviene de " + fmt(appState.measures.length + appState.actuals.length) + " registros gestionados en " + CONFIG.APP_NAME + ", alimentados por la integración nativa con " + CONFIG.CARBON_APP + ", extracciones del ERP corporativo y cargas asistidas de Excel y CSV. Cada indicador conserva la trazabilidad hasta el registro de origen."),
       P("El nivel de aseguramiento externo declarado para el período es " + ((appState.qualitative.find(q => q.metricId === "QL-ASSURE") || {}).value || "no definido").toLowerCase() + ". La calidad de datos consolidada de la plataforma al momento de la generación es de " + fmt(dataQuality().score, 0) + "%.")
     ]
@@ -3067,7 +3080,7 @@ function buildReport(rw) {
         C("rep-scope", "Distribución del inventario por alcance, " + rw.year, "donut"));
     }
     if (on("energy")) blocks.push(H("3.2 Energy"),
-      P("El consumo energético del período fue de " + n1(rv(rw, "ENV-ENERGY"), "GWh") + ", " + dirWord(rYoY(rw, "ENV-ENERGY")) + " respecto de " + (rw.year - 1) + ". La energía renovable representó " + fmt(rv(rw, "ENV-ENERGY-REN"), 1) + "% del total, a través de contratos PPA y generación solar on-site."),
+      P("El consumo energético del período fue de " + n1(rv(rw, "ENV-ENERGY"), "kWh") + ", " + dirWord(rYoY(rw, "ENV-ENERGY")) + " respecto de " + (rw.year - 1) + ". La energía renovable representó " + fmt(rv(rw, "ENV-ENERGY-REN"), 1) + "% del total, a través de contratos PPA y generación solar on-site."),
       C("rep-energy", "Consumo energético por ubicación, " + rw.year, "bar-loc-energy"));
     if (on("water")) blocks.push(H("3.3 Water"),
       P("La extracción de agua totalizó " + n1(rv(rw, "ENV-WATER-WD"), "m³") + " y el consumo neto " + n1(rv(rw, "ENV-WATER-CONS"), "m³") + ", " + dirWord(rYoY(rw, "ENV-WATER-CONS")) + " interanual. El objetivo de reducción vigente se monitorea contra la trayectoria definida para " + ((getMetricTarget("ENV-WATER-CONS") || {}).targetYear || "2028") + "."));
@@ -3210,10 +3223,10 @@ function drawReportCharts() {
       const g = sc => filterDataset(appState, Object.assign(rctx(rw), { measure: "CO2E", dims: { ghgScope: sc } })).reduce((a, r) => a + r.value, 0);
       mkChart(b.id, donutCfg(["Scope 1", "Scope 2", "Scope 3"], [g("Scope 1"), g("Scope 2"), g("Scope 3")], [PAL.accent, PAL.teal, PAL.accent3]));
     } else if (b.kind === "bar-loc-energy") {
-      const rows = OPS.map(l => ({ k: l.name, v: computeMetric(appState, "ENV-ENERGY", Object.assign(rctx(rw), { locs: [l.id] })) })).sort((a, b2) => b2.v - a.v);
-      mkChart(b.id, barCfg(rows.map(x => x.k), [{ label: "GWh", data: rows.map(x => x.v), backgroundColor: PAL.teal }], {}, true));
+      const rows = appState.masterData.locations.filter(l => l.operable).map(l => ({ k: l.name, v: computeMetric(appState, "ENV-ENERGY", Object.assign(rctx(rw), { locs: [l.id] })) })).sort((a, b2) => b2.v - a.v);
+      mkChart(b.id, barCfg(rows.map(x => x.k), [{ label: "kWh", data: rows.map(x => x.v), backgroundColor: PAL.teal }], {}, true));
     } else if (b.kind === "bar-loc-inj") {
-      const rows = OPS.map(l => ({ k: l.name, v: computeMetric(appState, "SOC-INJ", Object.assign(rctx(rw), { locs: [l.id] })) })).sort((a, b2) => b2.v - a.v);
+      const rows = appState.masterData.locations.filter(l => l.operable).map(l => ({ k: l.name, v: computeMetric(appState, "SOC-INJ", Object.assign(rctx(rw), { locs: [l.id] })) })).sort((a, b2) => b2.v - a.v);
       mkChart(b.id, barCfg(rows.map(x => x.k), [{ label: "Casos", data: rows.map(x => x.v), backgroundColor: PAL.warn }], {}, true));
     } else if (b.kind === "bar-area") {
       const areas = ["Environmental", "Social", "Governance"];
@@ -3319,8 +3332,8 @@ function openUserMenu() {
 /* ============================================================
    25. INICIALIZACIÓN
    ============================================================ */
-function init() {
-  appState = buildInitialState();
+function init(initialState) {
+  appState = initialState || buildInitialState();
   $("#favicon").href = CONFIG.LOGO;
   renderNav();
   renderShell();
@@ -3333,10 +3346,16 @@ function init() {
   mq.addEventListener ? mq.addEventListener("change", applyMq) : mq.addListener(applyMq);
   applyMq();
   icons();
-  setTimeout(() => toast("Dataset demo cargado: " + fmt(appState.measures.length + appState.actuals.length) + " registros entre 2022 y 2026."), 500);
+  setTimeout(() => toast(appState.measures.length + appState.actuals.length ? "Datos guardados cargados: " + fmt(appState.measures.length + appState.actuals.length) + " registros." : "Sin datos cargados. Usá Importar datos para comenzar."), 500);
 }
-document.addEventListener("DOMContentLoaded", init);
+// Startup is handled by bridge.js.
 
 </script>
-</body>
+<script>
+if (location.protocol === 'file:') {
+  document.body.innerHTML = '<main style="font-family:Arial,sans-serif;max-width:640px;margin:12vh auto;padding:32px;background:white;border-radius:16px"><h1>IVZ Sustainability Hub</h1><p>La aplicación funciona con el servidor Python. Abrí el siguiente enlace para acceder a tus pantallas y datos guardados.</p><p><a href="http://127.0.0.1:8000/" style="font-size:20px">Abrir IVZ Sustainability Hub</a></p><p>Si no abre, iniciá el servidor con iniciar-demo.ps1 desde la carpeta del proyecto.</p></main>';
+} else {
+  document.write('<script src="/bridge.js?v=20260916-reports"><\/script><script src="/reports-ui.js?v=20260916-reports"><\/script>');
+}
+</script></body>
 </html>
