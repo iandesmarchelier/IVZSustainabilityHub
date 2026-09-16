@@ -274,6 +274,17 @@ table.tbl tr.clickable{cursor:pointer}
 .disclaim{background:var(--warn-soft);border:1px solid var(--warn-line);border-radius:var(--r-sm);padding:11px 13px;font-size:12.5px;color:#6B4808;margin:14px 0}
 .rep-fig{border:1px solid var(--line);border-radius:var(--r-sm);padding:12px;margin:14px 0;background:var(--surface-2)}
 .rep-fig .cap{font-size:11.5px;color:var(--ink-3);margin-top:7px}
+.rep-doc .rep-fig{break-inside:avoid;page-break-inside:avoid;max-width:100%;box-sizing:border-box}
+.rep-doc .chart-box{width:100%;min-width:0;height:250px}
+.rep-doc canvas,.rep-doc .report-chart-image{display:block;max-width:100%}
+.rep-doc h2,.rep-doc h3{break-after:avoid;page-break-after:avoid}
+.rep-doc p{orphans:3;widows:3;overflow-wrap:anywhere}
+.rep-doc .tbl{width:100%;table-layout:fixed}
+.rep-doc .tbl th,.rep-doc .tbl td{white-space:normal;overflow-wrap:anywhere}
+.rep-doc .tbl th:first-child{width:30%}
+.rep-doc.exporting{width:680px!important;min-width:680px!important;max-width:680px!important;padding:0;border:0;border-radius:0;box-shadow:none;background:#fff;font-size:12px}
+.rep-doc.exporting .no-print{display:none!important}
+.rep-doc.exporting [contenteditable]{background:transparent;box-shadow:none}
 .ai-strip{display:flex;align-items:center;gap:10px;background:linear-gradient(100deg,var(--accent-soft),var(--teal-soft));border:1px solid var(--accent-line);border-radius:var(--r);padding:12px 15px;margin-bottom:16px}
 
 /* ---------- MISC ---------- */

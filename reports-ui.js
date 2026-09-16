@@ -97,6 +97,21 @@ drawReportCharts = function() {
     let cfg;
     if (b.kind === 'donut') cfg = donutCfg(b.labels,b.datasets[0].data,colors);
     else if (b.kind === 'stack') cfg = {type:'bar',data:{labels:b.labels,datasets},options:baseOpts({animation:false,plugins:{legend:{display:true,position:'bottom'}},scales:{x:{stacked:true,grid:{display:false}},y:{stacked:true,beginAtZero:true}}})};
+    else if (b.kind === 'objectives') {
+      const labels = b.labels.map(label => {
+        const lines = [''];
+        for (const word of label.split(' ')) {
+          if ((lines[lines.length-1]+' '+word).trim().length > 28 && lines[lines.length-1]) lines.push(word);
+          else lines[lines.length-1] = (lines[lines.length-1]+' '+word).trim();
+        }
+        return lines;
+      });
+      canvas.parentElement.style.height = Math.max(230,labels.reduce((sum,l)=>sum+Math.max(62,l.length*15+12),0)+55)+'px';
+      cfg = barCfg(labels,datasets,{animation:false},true);
+      cfg.options.plugins.legend = {display:true,position:'bottom',labels:{boxWidth:10,font:{size:11}}};
+      cfg.options.scales.x.suggestedMax = 100;
+      cfg.options.scales.x.title = {display:true,text:'Avance hacia la meta (%)'};
+    }
     else cfg = barCfg(b.labels,datasets,{animation:false},b.kind === 'horizontal');
     cfg.options.animation = false;
     mkChart(b.id,cfg);
@@ -128,17 +143,31 @@ downloadReport = async function() {
     const buttons = doc.querySelectorAll('.no-print');
     buttons.forEach(b => b.style.display='none');
     doc.classList.add('exporting');
-    // html2canvas captures <canvas> elements at their raw pixel-buffer size, not their CSS
-    // size. Chart.js normally sizes that buffer with devicePixelRatio for retina sharpness,
-    // so on any screen with devicePixelRatio > 1 the exported chart is wider/taller than its
-    // box and gets cropped by the page edge. Redraw at ratio 1 (buffer == CSS size) only for
-    // the export, then restore normal on-screen rendering afterwards.
-    Object.values(ui.charts).forEach(c => { c.options.devicePixelRatio = 1; c.resize(); });
-    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
     try {
+      await document.fonts.ready;
+      Object.values(ui.charts).forEach(c => { c.resize(); c.update('none'); });
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      // Freeze charts as images at the final paper width before html2pdf clones/reflows
+      // the document. Explicit CSS dimensions keep high-DPI buffers inside their frames.
+      const copy = doc.cloneNode(true);
+      copy.querySelectorAll('h2,h3').forEach(heading => {
+        const next = heading.nextElementSibling;
+        if (next && next.tagName === 'P') {
+          const lead = document.createElement('div'); lead.className = 'report-section-lead';
+          heading.before(lead); lead.append(heading,next);
+        }
+      });
+      const originals = doc.querySelectorAll('canvas');
+      copy.querySelectorAll('canvas').forEach((canvas,i) => {
+        const source = originals[i], size = source.getBoundingClientRect();
+        const img = document.createElement('img');
+        img.src = source.toDataURL('image/png'); img.className = 'report-chart-image';
+        img.style.width = size.width+'px'; img.style.height = size.height+'px';
+        canvas.replaceWith(img);
+      });
       await html2pdf().set({margin:12,filename:'IVZ_Sustainability_Report_'+appState.report.meta.year+'.pdf',
         image:{type:'jpeg',quality:.98},html2canvas:{scale:2,useCORS:true,scrollY:0},
-        jsPDF:{unit:'mm',format:'a4',orientation:'portrait'},pagebreak:{mode:['css','legacy'],avoid:['.rep-fig','h2','h3','tr']}}).from(doc).save();
+        jsPDF:{unit:'mm',format:'a4',orientation:'portrait'},pagebreak:{mode:['css','legacy'],avoid:['.rep-fig','.report-section-lead','tr']}}).from(copy).save();
     } finally {
       buttons.forEach(b => b.style.display='');
       doc.classList.remove('exporting');

@@ -89,7 +89,29 @@ async def make_report(st, request, company):
         expected = min(100,max(0,(year-by)/(ty-by)*100)) if ty > by else 100
         progress = None if cur is None or base is None or goal is None else ((cur-base)/(goal-base)*100 if goal != base else (100 if cur == goal else 0))
         status = 'Sin datos' if progress is None else 'On Track' if progress >= expected else 'At Risk' if progress >= expected-15 else 'Off Track'
-        targets.append(dict(name=t.get('name',t['metricId']),base=base,current=cur,goal=goal,unit=t.get('unit',''),status=status,progress=progress,expected=expected,area=t.get('area',''),targetYear=ty))
+        targets.append(dict(metricId=t['metricId'],name=t.get('name',t['metricId']),base=base,current=cur,goal=goal,unit=t.get('unit',''),status=status,progress=progress,expected=expected,area=t.get('area',''),targetYear=ty))
+    target_topics = {
+        'climate':('ENV-GHG-',), 'energy':('ENV-ENERGY',),
+        'water':('ENV-WATER-',), 'waste':('ENV-WASTE',), 'land':('ENV-LAND',),
+        'hs':('SOC-INJ','SOC-FATAL','SOC-LOST'),
+        'di':('SOC-WOM-','SOC-PAYGAP'), 'emp':('SOC-EMP','SOC-TURN','SOC-TRAIN'),
+        'gov':('GOV-',), 'eco':('ECO-',),
+    }
+    def target_figures(topic):
+        rows = [t for t in targets if t['metricId'].startswith(target_topics[topic])]
+        if not rows:
+            return [p('Sin objetivos configurados para esta sección y alcance.')]
+        blocks = [p('Ambiciones y objetivos: avance desde la línea base hacia la meta (100%). El avance esperado supone una trayectoria lineal hasta el año objetivo. Los objetivos sin mediciones se indican como sin datos.')]
+        # Small groups keep long objective names legible and each figure on one PDF page.
+        for start in range(0,len(rows),4):
+            group = rows[start:start+4]
+            blocks.append(chart('objectives-'+topic+'-'+str(start),
+                f'Ambiciones y objetivos · {TITLES[topic]} · {year} (%)',
+                'objectives',
+                [t['name']+' · '+str(t['targetYear'])+(' · sin datos' if t['progress'] is None else '') for t in group],
+                [{'label':'Avance real (%)','data':[t['progress'] for t in group]},
+                 {'label':'Avance esperado (%)','data':[t['expected'] for t in group]}]))
+        return blocks
     sections = []
     def add(key,blocks):
         if key in selected:
@@ -111,6 +133,7 @@ async def make_report(st, request, company):
             blocks.extend([{'type':'h3','text':TITLES[key]},p(text)])
             if figure:
                 blocks.append(figure)
+            blocks.extend(target_figures(key))
     sub(env,'climate',f'El inventario de GEI totalizó {amount("ENV-GHG-TOT")}. La intensidad fue {amount("ENV-GHG-INT")}, con {change("ENV-GHG-INT")}. Las emisiones evitadas fueron {amount("ENV-GHG-AVOID")} y se presentan por separado, sin descontarse del inventario.',chart('scope',f'Distribución por alcance, {year} · Scope 2 {s2}','donut',['Scope 1','Scope 2','Scope 3'],[{'label':'tCO2e','data':[lookup.get(mid,{}).get('value') for mid in mids]}]))
     sub(env,'energy',f'El consumo energético fue {amount("ENV-ENERGY")}, con {change("ENV-ENERGY")}. La proporción de energía renovable fue {amount("ENV-ENERGY-REN")}.',locchart('ENV-ENERGY','energy',f'Consumo energético por ubicación, {year}','kWh'))
     sub(env,'water',f'La extracción de agua totalizó {amount("ENV-WATER-WD")} y el consumo neto, {amount("ENV-WATER-CONS")}, con {change("ENV-WATER-CONS")}.')
@@ -124,6 +147,9 @@ async def make_report(st, request, company):
     add('social',social)
     add('gov',[{'type':'h3','text':'5.1 Governance structure'},p('Responsable de la supervisión ESG: '+qual('QL-BOARD')+'.'),p('Proceso de gestión de riesgos: '+qual('QL-RISK')+'.'),{'type':'h3','text':'5.2 Ethics and anti-corruption'},p(f'En {year}, los incidentes confirmados fueron {amount("GOV-CORR")}. La cobertura de formación anticorrupción fue {amount("GOV-ANTICORR")}. Cobertura del código de conducta de proveedores: {qual("QL-SUPPLIER")}.')])
     add('eco',[p(f'Los ingresos del período fueron {amount("ECO-REV")}, con costos operativos de {amount("ECO-OPEX")}. La inversión neta fue {amount("ECO-INV")} y el gasto en investigación y desarrollo, {amount("ECO-RND") }.'),p(f'La intensidad de emisiones fue {amount("ENV-GHG-INT")}. Este indicador vincula el inventario de GEI con los ingresos del mismo período y alcance.')])
+    for section in sections:
+        if section['id'] in ('gov','eco'):
+            section['blocks'].extend(target_figures(section['id']))
     areas = sorted({t['area'] for t in targets})
     progresses = [[t['progress'] for t in targets if t['area'] == a and t['progress'] is not None] for a in areas]
     add('targets',[p(f'Se identificaron {len(targets)} objetivos aplicables al alcance. El avance se calcula al cierre de {year}, respecto de la línea base y la meta de cada objetivo.'),{'type':'table','id':'tgt','rows':targets},chart('targets',f'Avance de objetivos por área ESG, {year} (%)','bar',areas,[{'label':'Avance (%)','data':[sum(v)/len(v) if v else None for v in progresses]}])])

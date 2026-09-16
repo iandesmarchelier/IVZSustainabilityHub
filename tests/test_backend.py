@@ -50,6 +50,7 @@ class DemoTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         report = response.json()
         self.assertIn('sin IA', report['meta']['mode'])
+        report['meta']['status'] = 'Approved'
         response = self.client.put('/api/reports/' + report['id'], headers=self.headers, json=report)
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()['meta']['status'], 'Approved')
@@ -62,6 +63,26 @@ class DemoTests(unittest.TestCase):
         self.assertEqual(self.client.put('/api/state', json={'revision': 0, 'state': self.state}).status_code, 403)
         self.state['measures'][0]['value'] = 'invalid'
         self.assertEqual(self.save().status_code, 422)
+
+    def test_objectives_follow_selected_report_sections(self):
+        self.login(); self.assertEqual(self.save().status_code, 200)
+        response = self.client.post('/api/reports', headers=self.headers,
+            json={'year':2025,'scope':'ALL','sections':['energy','gov']})
+        self.assertEqual(response.status_code,200,response.text)
+        report = response.json()
+        self.assertEqual([s['id'] for s in report['sections']],['env','gov'])
+        charts = [b for s in report['sections'] for b in s['blocks'] if b.get('kind')=='objectives']
+        self.assertTrue(any('energy' in b['id'] for b in charts))
+        self.assertTrue(any('gov' in b['id'] for b in charts))
+        self.assertFalse(any('climate' in b['id'] for b in charts))
+        for chart in charts:
+            self.assertLessEqual(len(chart['labels']),4)
+            self.assertEqual(len(chart['datasets']),2)
+        self.state['targets'] = []
+        self.assertEqual(self.save(1).status_code,200)
+        empty = self.client.post('/api/reports',headers=self.headers,
+            json={'year':2025,'scope':'ALL','sections':['energy']}).json()
+        self.assertFalse(any(b.get('kind')=='objectives' for s in empty['sections'] for b in s['blocks']))
 
     def test_scope2_does_not_double_count(self):
         validate_state(self.state)
