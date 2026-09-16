@@ -52,7 +52,7 @@ def scope_locations(st, scope='GRP', entity=None):
     locations = st['masterData']['locations']
     if entity:
         return {r['id'] for r in locations if r.get('entity') == entity}
-    if scope == 'ALL':
+    if scope == 'ALL' or (scope == 'GRP' and not any(r['id'] == 'GRP' for r in locations)):
         return {r['id'] for r in locations}
     selected = {scope}
     while True:

@@ -2756,7 +2756,7 @@ function commitImport() {
         n++;
       } else if (type === "targets") {
         const m = appState.metrics.find(x => x.id === row.metricId);
-        const tgtLoc = row.loc || "GRP";
+        const tgtLoc = row.loc || "ALL";
         // Reemplaza cualquier objetivo previo del mismo indicador+ubicación en vez de apilarlo
         appState.targets = appState.targets.filter(x => !(x.metricId === row.metricId && (x.loc || "GRP") === tgtLoc));
         appState.targets.unshift({

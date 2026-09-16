@@ -75,6 +75,9 @@ async def make_report(st, request, company):
     targets = []
     for t in st['targets']:
         ts = t.get('loc') or 'ALL'
+        # Older imports used GRP for "all locations", even without a GRP node.
+        if ts == 'GRP' and not any(l['id'] == 'GRP' for l in st['masterData']['locations']):
+            ts = 'ALL'
         if ts not in loc_ids and not (scope == 'ALL' and ts == 'ALL'):
             continue
         if entity and not scope_locations(st,ts).issubset(loc_ids):

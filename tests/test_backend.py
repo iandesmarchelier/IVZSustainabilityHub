@@ -64,6 +64,23 @@ class DemoTests(unittest.TestCase):
         self.state['measures'][0]['value'] = 'invalid'
         self.assertEqual(self.save().status_code, 422)
 
+    def test_legacy_imported_global_targets_without_group_node(self):
+        import asyncio
+        from backend.reports import make_report
+        self.state['masterData']['locations'] = [l for l in self.state['masterData']['locations'] if l['id'] != 'GRP']
+        for location in self.state['masterData']['locations']:
+            if location.get('parent') == 'GRP':
+                location['parent'] = None
+        for target in self.state['targets']:
+            target['loc'] = 'GRP'
+        report = asyncio.run(make_report(self.state, {'year':2025,'scope':'ALL'}, 'Test'))
+        rows = next(b['rows'] for s in report['sections'] for b in s['blocks'] if b['type']=='table')
+        self.assertEqual(len(rows),len(self.state['targets']))
+        self.assertTrue(all(t['current'] is not None for t in rows))
+        self.assertTrue(any(b.get('kind')=='objectives' for s in report['sections'] for b in s['blocks']))
+        narrow = asyncio.run(make_report(self.state, {'year':2025,'scope':'AR-BUE'}, 'Test'))
+        self.assertFalse(any(b.get('kind')=='objectives' for s in narrow['sections'] for b in s['blocks']))
+
     def test_objectives_follow_selected_report_sections(self):
         self.login(); self.assertEqual(self.save().status_code, 200)
         response = self.client.post('/api/reports', headers=self.headers,
