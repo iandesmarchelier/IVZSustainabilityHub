@@ -13,6 +13,7 @@ from .storage import db, initialize
 from .security import hash_password, verify_password, token_hash
 from .metrics import validate_state
 from .reports import make_report, regenerate_section, selected_sections
+from . import carbon_link
 from typing import Literal
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -254,6 +255,101 @@ def list_events(request: Request):
         return [dict(r) for r in s.execute('SELECT action, created FROM events WHERE account=? ORDER BY created DESC', (user['id'],)).fetchall()]
 
 
+def carbon_link_row(account_id):
+    with db() as s:
+        return s.execute('SELECT * FROM carbon_links WHERE account=?', (account_id,)).fetchone()
+
+
+class CarbonConnectBody(BaseModel):
+    token: str = Field(min_length=1, max_length=300)
+
+
+@app.post('/api/integrations/carbon/connect')
+async def connect_carbon(body: CarbonConnectBody, request: Request):
+    user = account(request)
+    try:
+        sites = await carbon_link.fetch_sites(body.token)
+    except httpx.HTTPError as exc:
+        raise HTTPException(422, 'No se pudo validar el token de IVZ Carbon.') from exc
+    with db() as s:
+        s.execute('INSERT INTO carbon_links VALUES (?, ?, \'{}\', NULL, NULL) '
+                  'ON CONFLICT(account) DO UPDATE SET token=?, site_map=\'{}\', last_sync=NULL, last_count=NULL',
+                  (user['id'], body.token, body.token))
+        event(s, user['id'], 'Integración IVZ Carbon conectada')
+    return {'connected': True, 'sites': sites, 'siteMap': {}}
+
+
+@app.get('/api/integrations/carbon')
+async def get_carbon_link(request: Request):
+    user = account(request)
+    row = carbon_link_row(user['id'])
+    if not row:
+        return {'connected': False}
+    try:
+        sites = await carbon_link.fetch_sites(row['token'])
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, 'No se pudo contactar a IVZ Carbon. Revisá el token o intentá más tarde.') from exc
+    return {'connected': True, 'sites': sites, 'siteMap': json.loads(row['site_map']),
+            'lastSync': row['last_sync'], 'lastCount': row['last_count']}
+
+
+class CarbonMappingBody(BaseModel):
+    siteMap: dict[str, str]
+
+
+@app.put('/api/integrations/carbon/mapping')
+def set_carbon_mapping(body: CarbonMappingBody, request: Request):
+    user = account(request)
+    if not carbon_link_row(user['id']):
+        raise HTTPException(404, 'Conectá IVZ Carbon primero.')
+    with db() as s:
+        row = s.execute('SELECT body FROM states WHERE account=?', (user['id'],)).fetchone()
+        operable = {l['id'] for l in json.loads(row['body'])['masterData']['locations'] if l.get('operable')} if row else set()
+        if any(loc not in operable for loc in body.siteMap.values()):
+            raise HTTPException(422, 'Ubicación inválida en el mapeo.')
+        s.execute('UPDATE carbon_links SET site_map=? WHERE account=?', (json.dumps(body.siteMap), user['id']))
+    return {'siteMap': body.siteMap}
+
+
+@app.post('/api/integrations/carbon/sync')
+async def sync_carbon(request: Request):
+    user = account(request)
+    link = carbon_link_row(user['id'])
+    if not link:
+        raise HTTPException(404, 'Conectá IVZ Carbon primero.')
+    site_map = json.loads(link['site_map'])
+    if not site_map:
+        raise HTTPException(422, 'Mapeá al menos un sitio antes de sincronizar.')
+    for attempt in range(5):
+        with db() as s:
+            row = s.execute('SELECT revision, body FROM states WHERE account=?', (user['id'],)).fetchone()
+        if not row:
+            raise HTTPException(422, 'Primero guardá datos en el Hub.')
+        state = json.loads(row['body'])
+        try:
+            count = await carbon_link.sync_measures(state, site_map, link['token'])
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, 'No se pudo sincronizar con IVZ Carbon. Revisá el token o intentá más tarde.') from exc
+        updated = datetime.now(timezone.utc).isoformat()
+        with db() as s:
+            result = s.execute('UPDATE states SET revision=revision+1, body=? WHERE account=? AND revision=?',
+                               (json.dumps(state, allow_nan=False), user['id'], row['revision']))
+            if result.rowcount == 1:
+                s.execute('UPDATE carbon_links SET last_sync=?, last_count=? WHERE account=?', (updated, count, user['id']))
+                event(s, user['id'], f'IVZ Carbon sincronizado: {count} registros')
+                return {'lastSync': updated, 'lastCount': count}
+    raise HTTPException(409, 'Otra pestaña modificó los datos durante la sincronización. Reintentá.')
+
+
+@app.delete('/api/integrations/carbon')
+def disconnect_carbon(request: Request):
+    user = account(request)
+    with db() as s:
+        s.execute('DELETE FROM carbon_links WHERE account=?', (user['id'],))
+        event(s, user['id'], 'Integración IVZ Carbon desconectada')
+    return {'ok': True}
+
+
 @app.get('/')
 def index():
     return FileResponse(ROOT / 'index.html', headers={'Cache-Control': 'no-store, max-age=0'})
@@ -267,6 +363,11 @@ def bridge():
 @app.get('/reports-ui.js')
 def reports_ui():
     return FileResponse(ROOT / 'reports-ui.js', media_type='text/javascript', headers={'Cache-Control': 'no-store, max-age=0'})
+
+
+@app.get('/carbon-integration-ui.js')
+def carbon_integration_ui():
+    return FileResponse(ROOT / 'carbon-integration-ui.js', media_type='text/javascript', headers={'Cache-Control': 'no-store, max-age=0'})
 
 
 import httpx

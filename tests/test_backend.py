@@ -3,6 +3,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from fastapi.testclient import TestClient
 from backend.app import app
 from backend.storage import db
@@ -103,6 +104,51 @@ class DemoTests(unittest.TestCase):
         empty = self.client.post('/api/reports',headers=self.headers,
             json={'year':2025,'scope':'ALL','sections':['energy']}).json()
         self.assertFalse(any(b.get('kind')=='trajectory' for s in empty['sections'] for b in s['blocks']))
+
+    def test_carbon_integration_connect_map_sync_disconnect(self):
+        self.login(); self.assertEqual(self.save().status_code, 200)
+        loc_id = next(l['id'] for l in self.state['masterData']['locations'] if l.get('operable'))
+        fake_sites = [{'id': 'S1', 'name': 'Planta Test', 'country': 'Argentina', 'cc': 'AR'}]
+        fake_periods = ['2024-01', '2024-06', '2025-01']
+        fake_summary = {'scopes': {'1': 1000.0, '2': 2000.0, '3': 3000.0}, 'scope2LocationKg': 2500.0}
+
+        async def fake_carbon_get(path, token, params=None):
+            self.assertEqual(token, 'ivzc_test-token')
+            return {'/api/link/sites': fake_sites, '/api/link/periods': fake_periods, '/api/summary': fake_summary}[path]
+
+        with patch('backend.carbon_link.carbon_get', fake_carbon_get):
+            r = self.client.post('/api/integrations/carbon/connect', headers=self.headers, json={'token': 'ivzc_test-token'})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(r.json()['sites'], fake_sites)
+            self.assertTrue(self.client.get('/api/integrations/carbon').json()['connected'])
+
+            self.assertEqual(self.client.put('/api/integrations/carbon/mapping', headers=self.headers,
+                json={'siteMap': {'S1': 'not-a-real-location'}}).status_code, 422)
+            r = self.client.put('/api/integrations/carbon/mapping', headers=self.headers, json={'siteMap': {'S1': loc_id}})
+            self.assertEqual(r.status_code, 200, r.text)
+
+            r = self.client.post('/api/integrations/carbon/sync', headers=self.headers, json={})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(r.json()['lastCount'], 8)  # 2 years x 4 scope rows
+
+            state = self.client.get('/api/state').json()['state']
+            carbon_rows = [m for m in state['measures'] if m.get('measure') == 'CO2E' and m.get('src') == 'IVZ Carbon'
+                           and m['loc'] == loc_id and m['y'] in (2024, 2025)]
+            self.assertEqual(len(carbon_rows), 8)
+            self.assertTrue(all(m['loc'] == loc_id for m in carbon_rows))
+            s1_2024 = next(m for m in carbon_rows if m['y'] == 2024 and m['dims']['ghgScope'] == 'Scope 1')
+            self.assertAlmostEqual(s1_2024['value'], 1.0)
+            s2m = next(m for m in carbon_rows if m['dims'].get('allocationMethod') == 'Market-based')
+            s2l = next(m for m in carbon_rows if m['dims'].get('allocationMethod') == 'Location-based')
+            self.assertAlmostEqual(s2m['value'], 2.0)
+            self.assertAlmostEqual(s2l['value'], 2.5)
+            # Any pre-existing manual CO2E rows for that location/year must have been replaced, not duplicated.
+            self.assertFalse(any(m.get('measure') == 'CO2E' and m['loc'] == loc_id and m['y'] in (2024, 2025)
+                                  and m.get('src') != 'IVZ Carbon' for m in state['measures']))
+
+        r = self.client.delete('/api/integrations/carbon', headers=self.headers)
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(self.client.get('/api/integrations/carbon').json()['connected'])
 
     def test_scope2_does_not_double_count(self):
         validate_state(self.state)

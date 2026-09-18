@@ -46,5 +46,6 @@ def initialize():
             'CREATE TABLE IF NOT EXISTS reports (id TEXT PRIMARY KEY, account TEXT NOT NULL, body TEXT NOT NULL, created TEXT NOT NULL)',
             'CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, account TEXT NOT NULL, action TEXT NOT NULL, created TEXT NOT NULL)',
             'CREATE TABLE IF NOT EXISTS login_limits (username TEXT PRIMARY KEY, attempts INTEGER NOT NULL, reset_at DOUBLE PRECISION NOT NULL)',
+            'CREATE TABLE IF NOT EXISTS carbon_links (account TEXT PRIMARY KEY, token TEXT NOT NULL, site_map TEXT NOT NULL DEFAULT \'{}\', last_sync TEXT, last_count INTEGER)',
         ]:
             s.execute(sql)

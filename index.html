@@ -1608,7 +1608,7 @@ function viewEmisiones(el) {
   el.innerHTML =
     '<div class="flexrow" style="margin-bottom:16px"><div><h1 class="page-title">Emisiones GEI</h1>' +
     '<p class="page-sub">Inventario GHG Protocol · ISO 14064-1 · ' + esc(locName(filters.loc)) + " · " + filters.year + " · Scope 2 " + filters.s2 + "</p></div>" +
-    '<div class="right flexrow"><span class="badge teal"><i data-lucide="leaf" style="width:12px;height:12px"></i> Fuente: ' + CONFIG.CARBON_APP + "</span>" +
+    '<div class="right flexrow">' + (typeof carbonSourceBadge === "function" ? carbonSourceBadge(filters.loc) : "") +
     '<button class="btn" id="e-trace"><i data-lucide="search-code"></i> Trazabilidad</button></div></div>' +
 
     '<div class="grid g3" style="margin-bottom:16px">' +
@@ -3382,7 +3382,7 @@ function init(initialState) {
 if (location.protocol === 'file:') {
   document.body.innerHTML = '<main style="font-family:Arial,sans-serif;max-width:640px;margin:12vh auto;padding:32px;background:white;border-radius:16px"><h1>IVZ Sustainability Hub</h1><p>La aplicación funciona con el servidor Python. Abrí el siguiente enlace para acceder a tus pantallas y datos guardados.</p><p><a href="http://127.0.0.1:8000/" style="font-size:20px">Abrir IVZ Sustainability Hub</a></p><p>Si no abre, iniciá el servidor con iniciar-demo.ps1 desde la carpeta del proyecto.</p></main>';
 } else {
-  document.write('<script src="/bridge.js?v=20260916-reports"><\/script><script src="/reports-ui.js?v=20260916-reports"><\/script>');
+  document.write('<script src="/bridge.js?v=20260916-reports"><\/script><script src="/reports-ui.js?v=20260916-reports"><\/script><script src="/carbon-integration-ui.js?v=20260918-carbon"><\/script>');
 }
 </script></body>
 </html>
