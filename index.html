@@ -52,6 +52,7 @@ a{color:var(--accent);text-decoration:none}
 .side{background:var(--nav);color:var(--nav-ink);display:flex;flex-direction:column;position:sticky;top:0;height:100vh}
 .brand{display:flex;align-items:center;gap:10px;padding:16px 16px 14px;border-bottom:1px solid rgba(255,255,255,.07)}
 .brand-logo{height:42px;width:auto;display:block;flex:none}
+.brand-logo:not([src]){visibility:hidden}
 .rep-logo{height:44px;width:auto;display:block}
 .brand-txt b{display:block;color:var(--nav-ink-hi);font-size:13.5px;font-weight:600;line-height:1.25}
 .brand-txt span{display:block;font-size:11px;color:#7D9184}
@@ -240,6 +241,10 @@ table.tbl tr.clickable{cursor:pointer}
 @keyframes shine{0%{background-position:100% 0}100%{background-position:0 0}}
 .spin{animation:spin 1s linear infinite;transform-origin:center}
 @keyframes spin{to{transform:rotate(360deg)}}
+.boot-gate{position:fixed;inset:0;z-index:9999;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px}
+.boot-gate-logo{height:64px;width:auto;animation:boot-pulse 1.4s ease-in-out infinite}
+.boot-gate-name{font:600 15px system-ui;color:var(--ink);letter-spacing:.2px}
+@keyframes boot-pulse{0%,100%{opacity:.4;transform:scale(.92)}50%{opacity:1;transform:scale(1)}}
 
 /* ---------- DROPZONE / WIZARD ---------- */
 .drop{border:2px dashed var(--line-2);border-radius:var(--r);padding:34px;text-align:center;background:var(--surface-2);cursor:pointer}
@@ -315,6 +320,7 @@ table.tbl tr.clickable{cursor:pointer}
 </style>
 </head>
 <body>
+<div id="boot-gate" class="boot-gate"><img id="boot-gate-logo" class="boot-gate-logo" alt="IVZ Sustainability Hub"><div class="boot-gate-name">IVZ Sustainability Hub</div></div>
 <div class="app">
   <aside class="side" id="side">
     <div class="brand">
@@ -361,6 +367,7 @@ const CONFIG = {
   DEMO_DATE: "31 ago 2026"
 };
 document.title = CONFIG.APP_NAME;
+document.getElementById('boot-gate-logo').src = CONFIG.LOGO;
 
 /* Paleta usada por los gráficos (coherente con la identidad IVZ) */
 const PAL = {

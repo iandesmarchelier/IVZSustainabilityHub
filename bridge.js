@@ -45,13 +45,16 @@ async function persist() {
 }
 
 function showLogin(message = '') {
+  document.getElementById('boot-gate')?.remove();
   const screen = document.createElement('div');
   screen.id = 'login-screen';
-  screen.style.cssText = 'position:fixed;inset:0;background:#f2f5f1;z-index:99999;display:grid;place-items:center';
-  screen.innerHTML = '<form style="width:360px;max-width:90vw;padding:32px;background:white;border-radius:16px;box-shadow:0 8px 40px #0001">' +
-    '<h2>IVZ Sustainability Hub</h2><p>Sistema Tenant Invenzis</p><label>Usuario de empresa<input name="username" autocomplete="username" required class="inp" style="width:100%;margin:8px 0 16px"></label>' +
-    '<label>Contraseña<input type="password" name="password" autocomplete="current-password" required class="inp" style="width:100%;margin:8px 0 16px"></label>' +
-    '<p id="login-error" style="color:#b42318"></p><button class="btn pri" type="submit">Ingresar</button></form>';
+  screen.style.cssText = 'position:fixed;inset:0;background:var(--bg);color:var(--ink);font:16px system-ui;z-index:99999;display:grid;place-items:center';
+  screen.innerHTML = '<main style="background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:44px;width:min(440px,94vw);box-shadow:var(--sh-lg)">' +
+    '<h1 style="margin:0 0 8px;font-size:26px">IVZ Sustainability Hub</h1><p style="color:var(--ink-2);line-height:1.5;margin:0">Sistema Tenant Invenzis</p>' +
+    '<form><label style="display:block;margin-top:20px">Usuario de empresa<input name="username" autocomplete="username" required style="font:inherit;width:100%;padding:12px;border-radius:8px;border:1px solid var(--line-2);margin-top:8px"></label>' +
+    '<label style="display:block;margin-top:20px">Contraseña<input type="password" name="password" autocomplete="current-password" required style="font:inherit;width:100%;padding:12px;border-radius:8px;border:1px solid var(--line-2);margin-top:8px"></label>' +
+    '<p id="login-error" role="alert" style="color:var(--bad);min-height:24px;margin:8px 0 0"></p>' +
+    '<button type="submit" style="font:inherit;width:100%;padding:12px;border-radius:8px;border:0;background:var(--accent);color:white;cursor:pointer;margin-top:8px">Ingresar</button></form></main>';
   document.body.appendChild(screen);
   screen.querySelector('#login-error').textContent = message;
   screen.querySelector('form').onsubmit = async event => {
@@ -93,6 +96,7 @@ async function boot() {
   savedState = savedJson;
   persistenceReady = true;
   destroyCharts(); render();
+  document.getElementById('boot-gate')?.remove();
   if (energyMigrated) persist().catch(e => toast(e.message, 'bad'));
   await persist();
 }
