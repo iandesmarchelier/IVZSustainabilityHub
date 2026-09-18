@@ -94,24 +94,6 @@ async function boot() {
   persistenceReady = true;
   destroyCharts(); render();
   if (energyMigrated) persist().catch(e => toast(e.message, 'bad'));
-  if (!document.getElementById('backend-tools')) {
-    const bar = document.createElement('div'); bar.id = 'backend-tools';
-    bar.className = 'no-print';
-    bar.style.cssText = 'position:fixed;bottom:12px;right:16px;z-index:150;background:white;padding:10px 14px;border:1px solid #ccc;border-radius:10px;display:flex;gap:12px;align-items:center;max-width:90vw';
-    bar.innerHTML = '<small id="server-status">Guardado</small><button class="btn" id="server-save">Guardar</button><button class="btn" id="server-history">Reportes guardados</button>';
-    document.body.appendChild(bar);
-    document.getElementById('server-save').onclick = () => persist().catch(e => toast(e.message, 'bad'));
-    document.getElementById('server-history').onclick = async () => {
-      try {
-        const reports = await api('reports');
-        modal({title: 'Reportes guardados', body: reports.length ? reports.map((r, i) =>
-          '<p><button class="btn" data-history="' + i + '">' + esc(r.meta.title) + ' · ' + esc(r.meta.status) + '</button></p>').join('') : '<p>No hay reportes.</p>',
-          footer: '<button class="btn" data-close>Cerrar</button>', onMount: w => {
-            w.querySelectorAll('[data-history]').forEach(b => b.onclick = () => {appState.report = reports[+b.dataset.history]; closeModal(); ui.tab.reportes = 'editor'; go('reportes');});
-          }});
-      } catch (e) { toast(e.message, 'bad'); }
-    };
-  }
   await persist();
 }
 

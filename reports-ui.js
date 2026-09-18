@@ -177,6 +177,14 @@ downloadReport = async function() {
   } catch(e) {toast(e.message,'bad');}
 };
 
+function openReportHistory() {
+  api('reports').then(reports => modal({title: 'Reportes guardados', body: reports.length ? reports.map((r, i) =>
+      '<p><button class="btn" data-history="' + i + '">' + esc(r.meta.title) + ' · ' + esc(r.meta.status) + '</button></p>').join('') : '<p>No hay reportes.</p>',
+    footer: '<button class="btn" data-close>Cerrar</button>', onMount: w => {
+      w.querySelectorAll('[data-history]').forEach(b => b.onclick = () => {appState.report = reports[+b.dataset.history]; closeModal(); ui.tab.reportes = 'editor'; go('reportes');});
+    }})).catch(e => toast(e.message, 'bad'));
+}
+
 const originalReportList = viewReportes;
 viewReportes = function(el) {
   originalReportList(el);
@@ -186,4 +194,12 @@ viewReportes = function(el) {
       card.querySelector('.card-b').innerHTML = '<b>Reporte ESG General</b><p class="muted">Estructura ambiental, social, de gobernanza y económica. Otros marcos se configurarán más adelante.</p>';
     }
   });
+  const genButton = el.querySelector('#r-gen');
+  if (genButton && !el.querySelector('#r-history')) {
+    const historyButton = document.createElement('button');
+    historyButton.className = 'btn'; historyButton.id = 'r-history'; historyButton.style.padding = '10px 18px';
+    historyButton.innerHTML = '<i data-lucide="history"></i> Reportes guardados';
+    historyButton.onclick = openReportHistory;
+    genButton.before(historyButton);
+  }
 };

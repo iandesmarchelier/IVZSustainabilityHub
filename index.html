@@ -3003,7 +3003,7 @@ function drawReportWizard() {
         '<label class="chk"' + (s.sub ? ' style="padding-left:26px"' : "") + '><input type="checkbox" data-rs="' + i + '"' + (s.on ? " checked" : "") + "><span>" + esc(s.title) + "</span></label>").join("") + "</div>" +
       (typeof aiAvailable !== "undefined" && aiAvailable ? '<div class="field" style="margin-top:16px"><label>Resumen ejecutivo</label>' +
         '<div class="grid g2" style="gap:8px">' +
-        '<label class="chk"><input type="radio" name="rw-ai" data-rai="0"' + (!RW.useAI ? " checked" : "") + '><span>Plantilla calculada (como ahora)</span></label>' +
+        '<label class="chk"><input type="radio" name="rw-ai" data-rai="0"' + (!RW.useAI ? " checked" : "") + '><span>Plantilla estándar</span></label>' +
         '<label class="chk"><input type="radio" name="rw-ai" data-rai="1"' + (RW.useAI ? " checked" : "") + '><span>Con IA (Gemini)</span></label>' +
         "</div></div>" : "");
   }
