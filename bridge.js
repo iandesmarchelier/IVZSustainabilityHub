@@ -84,7 +84,9 @@ async function boot() {
   const state = data.state || buildEmptyState();
   const energyMigrated = migrateEnergyUnit(state);
   init(state);
-  document.querySelector('#btn-user').textContent = 'Sistema Tenant - IVZ Sustainability Hub';
+  document.getElementById('profile-name').textContent = data.username;
+  document.getElementById('profile-company').textContent = data.company;
+  document.getElementById('profile-avatar').textContent = data.username.slice(0, 2).toUpperCase();
   // One general template in this demo. Other frameworks are future work.
   appState.integrations.forEach(i => { if (i.id !== 'INT-XLS') { i.status = 'Not configured'; i.records = 0; i.lastSync = '—'; } });
   serverRevision = data.revision;
@@ -96,13 +98,9 @@ async function boot() {
     const bar = document.createElement('div'); bar.id = 'backend-tools';
     bar.className = 'no-print';
     bar.style.cssText = 'position:fixed;bottom:12px;right:16px;z-index:150;background:white;padding:10px 14px;border:1px solid #ccc;border-radius:10px;display:flex;gap:12px;align-items:center;max-width:90vw';
-    bar.innerHTML = '<small id="server-status">Guardado</small><button class="btn" id="server-save">Guardar</button><button class="btn" id="server-history">Reportes guardados</button><button class="btn" id="server-logout">Salir</button>';
+    bar.innerHTML = '<small id="server-status">Guardado</small><button class="btn" id="server-save">Guardar</button><button class="btn" id="server-history">Reportes guardados</button>';
     document.body.appendChild(bar);
     document.getElementById('server-save').onclick = () => persist().catch(e => toast(e.message, 'bad'));
-    document.getElementById('server-logout').onclick = async () => {
-      try { await persist(); await api('logout', 'POST'); location.reload(); }
-      catch (e) { toast(e.message, 'bad'); }
-    };
     document.getElementById('server-history').onclick = async () => {
       try {
         const reports = await api('reports');
@@ -162,7 +160,18 @@ filterActuals = function (st, metricId, opts) {
   return rows.filter(r => months ? r.periodType === 'M' && months.includes(r.m) :
     r.periodType === (monthly.has(r.loc + ':' + r.y) ? 'M' : 'Y'));
 };
-openUserMenu = () => modal({title: 'Cuenta de empresa', body: '<p>' + esc(CONFIG.USER.name) + '</p><p>' + esc(CONFIG.USER.role) + '</p><p>Datos guardados en el servidor. Sesión de hasta 8 horas.</p>', footer: '<button class="btn" data-close>Cerrar</button>'});
+openUserMenu = () => modal({
+  title: 'Configuración de la cuenta', icon: 'settings',
+  body: '<dl class="kv"><dt>Usuario</dt><dd>' + esc(CONFIG.USER.name) + '</dd><dt>Organización</dt><dd>' + esc(CONFIG.USER.role) + '</dd></dl>',
+  footer: '<button class="btn" data-close>Volver</button><button class="btn" id="account-logout"><i data-lucide="log-out"></i>Cerrar sesión</button>',
+  onMount: w => {
+    w.querySelector('#account-logout').onclick = async event => {
+      const button = event.currentTarget; button.disabled = true;
+      try { await persist(); await api('logout', 'POST'); persistenceReady = false; location.reload(); }
+      catch (e) { button.disabled = false; toast(e.message, 'bad'); }
+    };
+  }
+});
 
 window.addEventListener('beforeunload', event => {
   if (persistenceReady && JSON.stringify(appState) !== savedState) {event.preventDefault(); event.returnValue = '';}

@@ -65,8 +65,14 @@ a{color:var(--accent);text-decoration:none}
 .nav-item i,.nav-item svg{width:16px;height:16px;flex:none;opacity:.85}
 .side-foot{padding:12px;border-top:1px solid rgba(255,255,255,.07)}
 .tour-btn{width:100%;display:flex;align-items:center;justify-content:center;gap:8px;padding:9px;border-radius:8px;
-  background:var(--accent-2);color:#fff;border:0;font-weight:600;font-size:13px;cursor:pointer}
-.tour-btn:hover{background:#579061}
+  background:#284B39;color:#fff;border:1px solid #3A604A;font-weight:600;font-size:13px;cursor:pointer}
+.tour-btn:hover{background:#345D46}
+.tour-btn:focus-visible,.side-user:focus-visible{outline:2px solid #CFE3D5;outline-offset:3px}
+.side-foot{flex-shrink:0}
+.account-copy{flex:1;min-width:0;text-align:left}
+.account-name{display:block;color:#DFEAE2;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.account-company{display:block;color:#93A899;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px}
+.side-user>svg{width:20px;height:20px;flex:none}
 .side-user{display:flex;align-items:center;gap:9px;margin-top:12px;padding:6px 4px;color:#93A899;font-size:12px;cursor:pointer;border-radius:8px;border:0;background:none;width:100%}
 .side-user:hover{background:rgba(255,255,255,.06)}
 .avatar{width:28px;height:28px;border-radius:50%;background:#2F4E3B;color:#CFE3D5;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;flex:none}
@@ -315,7 +321,7 @@ table.tbl tr.clickable{cursor:pointer}
     <nav class="nav" id="nav"></nav>
     <div class="side-foot">
       <button class="tour-btn" id="btn-tour"><i data-lucide="play-circle"></i> Demo guiada</button>
-      <button class="side-user" id="btn-user"><span class="avatar">DU</span><span style="flex:1;text-align:left">Demo User<br><span style="opacity:.7;font-size:11px">Sustainability Manager</span></span><i data-lucide="settings"></i></button>
+      <button class="side-user" id="btn-user" aria-label="Configuración de la cuenta" title="Configuración"><span class="avatar" id="profile-avatar"></span><span class="account-copy"><span class="account-name" id="profile-name"></span><span class="account-company" id="profile-company"></span></span><i data-lucide="settings"></i></button>
     </div>
   </aside>
   <div class="main">
