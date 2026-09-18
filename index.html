@@ -2972,7 +2972,7 @@ function viewReportes(el) {
 /* ---------- WIZARD DEL GENERADOR ---------- */
 let RW = null;
 function openReportWizard() {
-  RW = { step: 1, year: filters.year, scope: "ALL", scopeKind: "L", s2: filters.s2, template: "gen", sections: REPORT_SECTIONS.map(s => ({ ...s })) };
+  RW = { step: 1, year: filters.year, scope: "ALL", scopeKind: "L", s2: filters.s2, template: "gen", sections: REPORT_SECTIONS.map(s => ({ ...s })), useAI: false };
   drawReportWizard();
 }
 function drawReportWizard() {
@@ -3000,7 +3000,12 @@ function drawReportWizard() {
   } else {
     body = '<p class="muted" style="margin-top:0">Elegí las secciones a incluir en el borrador.</p>' +
       '<div class="grid g2" style="gap:2px">' + RW.sections.map((s, i) =>
-        '<label class="chk"' + (s.sub ? ' style="padding-left:26px"' : "") + '><input type="checkbox" data-rs="' + i + '"' + (s.on ? " checked" : "") + "><span>" + esc(s.title) + "</span></label>").join("") + "</div>";
+        '<label class="chk"' + (s.sub ? ' style="padding-left:26px"' : "") + '><input type="checkbox" data-rs="' + i + '"' + (s.on ? " checked" : "") + "><span>" + esc(s.title) + "</span></label>").join("") + "</div>" +
+      (typeof aiAvailable !== "undefined" && aiAvailable ? '<div class="field" style="margin-top:16px"><label>Resumen ejecutivo</label>' +
+        '<div class="grid g2" style="gap:8px">' +
+        '<label class="chk"><input type="radio" name="rw-ai" data-rai="0"' + (!RW.useAI ? " checked" : "") + '><span>Plantilla calculada (como ahora)</span></label>' +
+        '<label class="chk"><input type="radio" name="rw-ai" data-rai="1"' + (RW.useAI ? " checked" : "") + '><span>Con IA (Gemini)</span></label>' +
+        "</div></div>" : "");
   }
   modal({
     title: "Generar reporte ESG", icon: "wand-2", size: "mid",
@@ -3012,6 +3017,7 @@ function drawReportWizard() {
       $$("[data-ry]", w).forEach(c => c.onclick = () => { RW.year = +c.dataset.ry; drawReportWizard(); });
       $$("[data-rt]", w).forEach(c => c.onclick = () => { RW.template = c.dataset.rt; drawReportWizard(); });
       $$("[data-rs]", w).forEach(c => c.onchange = e => RW.sections[+e.target.dataset.rs].on = e.target.checked);
+      $$("[data-rai]", w).forEach(r => r.onchange = e => { RW.useAI = e.target.dataset.rai === "1"; });
       const back = $("#rw-back", w); if (back) back.onclick = () => { RW.step--; drawReportWizard(); };
       $("#rw-next", w).onclick = () => {
         if (RW.step === 2) { const v = $("#rw-scope", w).value; RW.scopeKind = v[0]; RW.scope = v.slice(2); }

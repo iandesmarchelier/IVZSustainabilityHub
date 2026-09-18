@@ -3,7 +3,7 @@ let selectedReportSection = null;
 
 runAiGeneration = async function() {
   const request = {year: RW.year, scope: RW.scope, scopeKind: RW.scopeKind || 'L',
-    s2: RW.s2, template: 'gen', sections: RW.sections.filter(s => s.on).map(s => s.id)};
+    s2: RW.s2, template: 'gen', sections: RW.sections.filter(s => s.on).map(s => s.id), useAI: !!RW.useAI};
   modal({title:'Generando reporte ESG', icon:'file-text', body:'<p id="report-progress">Guardando datos del período…</p>'});
   try {
     await persist();
@@ -123,7 +123,7 @@ regenSection = function(id) {
   if (!id) return;
   const section = appState.report.sections.find(s => s.id === id);
   if (!section) return;
-  modal({title:'Regenerar '+section.title,body:'<p>'+ (aiAvailable ? 'Se reescribirán los textos de esta sección con los datos guardados en el reporte.' : 'Se restaurará el texto calculado de esta sección. La conexión con IA todavía no está configurada.') + ' Las ediciones de esta sección serán reemplazadas.</p>',
+  modal({title:'Regenerar '+section.title,body:'<p>'+ (appState.report.meta.useAI ? 'Se reescribirán los textos de esta sección con IA, a partir de los datos guardados en el reporte.' : 'Se restaurará el texto calculado de esta sección (este reporte se generó sin IA).') + ' Las ediciones de esta sección serán reemplazadas.</p>',
     footer:'<button class="btn" data-close>Cancelar</button><button class="btn pri" id="confirm-regenerate">Regenerar sección</button>',onMount:w => {
       w.querySelector('#confirm-regenerate').onclick = async e => {
         e.currentTarget.disabled = true;

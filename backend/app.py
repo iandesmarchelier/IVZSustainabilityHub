@@ -139,6 +139,7 @@ class ReportBody(BaseModel):
     s2: Literal['Market-based', 'Location-based'] = 'Market-based'
     template: Literal['gen'] = 'gen'
     sections: list[str] | None = None
+    useAI: bool = False
 
 
 @app.post('/api/reports')
