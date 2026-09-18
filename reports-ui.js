@@ -4,11 +4,13 @@ let selectedReportSection = null;
 runAiGeneration = async function() {
   const request = {year: RW.year, scope: RW.scope, scopeKind: RW.scopeKind || 'L',
     s2: RW.s2, template: 'gen', sections: RW.sections.filter(s => s.on).map(s => s.id), useAI: !!RW.useAI};
-  modal({title:'Generando reporte ESG', icon:'file-text', body:'<p id="report-progress">Guardando datos del período…</p>'});
+  modal({title:'Generando reporte ESG', icon:'file-text', body:
+    '<div class="flexrow" style="gap:12px;align-items:center"><i data-lucide="loader-2" class="spin" style="width:22px;height:22px;color:var(--accent);flex:none"></i>' +
+    '<p id="report-progress" style="margin:0">Guardando datos del período…</p></div>'});
   try {
     await persist();
     const progress = document.getElementById('report-progress');
-    if (progress) progress.textContent = 'Calculando indicadores y preparando las secciones y los gráficos…';
+    if (progress) progress.textContent = request.useAI ? 'Calculando indicadores y generando el resumen ejecutivo con IA…' : 'Calculando indicadores y preparando las secciones y los gráficos…';
     const report = await api('reports','POST',request);
     appState.report = report; selectedReportSection = report.sections[0]?.id;
     await persist(); closeModal(); ui.tab.reportes = 'editor'; go('reportes');
@@ -126,12 +128,13 @@ regenSection = function(id) {
   modal({title:'Regenerar '+section.title,body:'<p>'+ (appState.report.meta.useAI ? 'Se reescribirán los textos de esta sección con IA, a partir de los datos guardados en el reporte.' : 'Se restaurará el texto calculado de esta sección (este reporte se generó sin IA).') + ' Las ediciones de esta sección serán reemplazadas.</p>',
     footer:'<button class="btn" data-close>Cancelar</button><button class="btn pri" id="confirm-regenerate">Regenerar sección</button>',onMount:w => {
       w.querySelector('#confirm-regenerate').onclick = async e => {
-        e.currentTarget.disabled = true;
+        const button = e.currentTarget; const original = button.innerHTML;
+        button.disabled = true; button.innerHTML = '<i data-lucide="loader-2" class="spin" style="width:14px;height:14px"></i> Regenerando…'; icons();
         try {
           await saveReport(false);
           const report = await api('reports/'+encodeURIComponent(appState.report.id)+'/sections/'+encodeURIComponent(id)+'/regenerate','POST',{});
           appState.report = report; await persist(); closeModal(); destroyCharts(); render(); toast('Sección regenerada.');
-        } catch(error) {toast(error.message,'bad'); e.target.disabled = false;}
+        } catch(error) {toast(error.message,'bad'); button.disabled = false; button.innerHTML = original;}
       };
     }});
 };
