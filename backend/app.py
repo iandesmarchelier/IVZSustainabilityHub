@@ -20,9 +20,22 @@ ROOT = Path(__file__).resolve().parent.parent
 DUMMY_PASSWORD = hash_password('dummy-not-an-account')
 
 
+def bootstrap_admin():
+    """Provision the ADMIN account from a secret hash; never reset an existing user."""
+    digest = os.getenv('ADMIN_PASSWORD_HASH')
+    if not digest:
+        return
+    with db() as s:
+        s.execute("INSERT INTO accounts (id,username,company,password,role,active,created) VALUES (?,?,?,?,?,?,?) "
+                  "ON CONFLICT(username) DO NOTHING",
+                  (str(uuid.uuid4()), 'admin', 'Administración IVZ Sustainability Hub', digest, 'admin', True,
+                   datetime.now(timezone.utc).isoformat()))
+
+
 @asynccontextmanager
 async def lifespan(app):
     initialize()
+    bootstrap_admin()
     yield
 
 
@@ -47,11 +60,19 @@ async def guard(request, call_next):
 def account(request):
     token = request.cookies.get('ivz_session', '')
     with db() as s:
-        row = s.execute('SELECT a.* FROM accounts a JOIN sessions t ON t.account=a.id WHERE t.token=? AND t.expires>?',
+        row = s.execute('SELECT a.id,a.username,a.company,a.role,a.active,t.impersonated_by FROM accounts a '
+                        'JOIN sessions t ON t.account=a.id WHERE t.token=? AND t.expires>?',
                         (token_hash(token), time.time())).fetchone()
-    if not row:
+    if not row or not row['active']:
         raise HTTPException(401, 'Ingresá a tu cuenta')
     return dict(row)
+
+
+def require_admin(request):
+    user = account(request)
+    if user['role'] != 'admin':
+        raise HTTPException(403, 'Necesitás permisos de administrador.')
+    return user
 
 
 def event(s, user, action):
@@ -81,10 +102,12 @@ def login(body: Login, response: Response):
     valid = verify_password(body.password, user['password'] if user else DUMMY_PASSWORD)
     if not user or not valid:
         raise HTTPException(401, 'Usuario o contraseña incorrectos')
+    if not user['active']:
+        raise HTTPException(403, 'Esta cuenta fue desactivada.')
     token = secrets.token_urlsafe(32)
     with db() as s:
         s.execute('DELETE FROM sessions WHERE expires<?', (time.time(),))
-        s.execute('INSERT INTO sessions VALUES (?, ?, ?)', (token_hash(token), user['id'], time.time()+28800))
+        s.execute('INSERT INTO sessions (token,account,expires) VALUES (?, ?, ?)', (token_hash(token), user['id'], time.time()+28800))
         s.execute('DELETE FROM login_limits WHERE username=?', (username,))
     response.set_cookie('ivz_session', token, httponly=True, secure=bool(os.getenv('VERCEL')) or os.getenv('COOKIE_SECURE') == '1',
                         samesite='strict', max_age=28800, path='/')
@@ -99,13 +122,21 @@ def logout(request: Request, response: Response):
     return {'ok': True}
 
 
+@app.get('/api/me')
+def me(request: Request):
+    user = account(request)
+    return {'id': user['id'], 'username': user['username'], 'company': user['company'],
+            'role': user['role'], 'impersonating': bool(user.get('impersonated_by'))}
+
+
 @app.get('/api/state')
 def get_state(request: Request):
     user = account(request)
     with db() as s:
         row = s.execute('SELECT * FROM states WHERE account=?', (user['id'],)).fetchone()
     return {'company': user['company'], 'username': user['username'], 'revision': row['revision'] if row else 0,
-            'state': json.loads(row['body']) if row else None, 'ai': bool(os.getenv('GEMINI_API_KEY'))}
+            'state': json.loads(row['body']) if row else None, 'ai': bool(os.getenv('GEMINI_API_KEY')),
+            'role': user['role'], 'impersonating': bool(user.get('impersonated_by'))}
 
 
 class StateBody(BaseModel):
@@ -350,9 +381,119 @@ def disconnect_carbon(request: Request):
     return {'ok': True}
 
 
+@app.get('/api/admin/accounts')
+def admin_list_accounts(request: Request):
+    require_admin(request)
+    with db() as s:
+        rows = s.execute('SELECT a.id,a.username,a.company,a.role,a.active,a.created,st.revision FROM accounts a '
+                         'LEFT JOIN states st ON st.account=a.id ORDER BY a.created DESC, a.username').fetchall()
+    return [dict(r) for r in rows]
+
+
+class AdminAccountCreate(BaseModel):
+    username: str = Field(min_length=1, max_length=150)
+    company: str = Field(min_length=1, max_length=200)
+
+
+@app.post('/api/admin/accounts')
+def admin_create_account(body: AdminAccountCreate, request: Request):
+    admin = require_admin(request)
+    name = body.username.strip().lower()
+    company = body.company.strip()
+    password = secrets.token_urlsafe(12)
+    account_id = str(uuid.uuid4())
+    with db() as s:
+        if s.execute('SELECT id FROM accounts WHERE username=?', (name,)).fetchone():
+            raise HTTPException(409, 'Ya existe una cuenta con ese usuario.')
+        s.execute('INSERT INTO accounts (id,username,company,password,role,active,created) VALUES (?,?,?,?,?,?,?)',
+                  (account_id, name, company, hash_password(password), 'client', True, datetime.now(timezone.utc).isoformat()))
+        event(s, admin['id'], f'Cuenta creada: {name} ({company})')
+    return {'id': account_id, 'username': name, 'company': company, 'password': password}
+
+
+@app.post('/api/admin/accounts/{account_id}/reset-password')
+def admin_reset_password(account_id: str, request: Request):
+    admin = require_admin(request)
+    password = secrets.token_urlsafe(12)
+    with db() as s:
+        target = s.execute('SELECT id,username FROM accounts WHERE id=?', (account_id,)).fetchone()
+        if not target:
+            raise HTTPException(404, 'Cuenta no encontrada.')
+        s.execute('UPDATE accounts SET password=? WHERE id=?', (hash_password(password), account_id))
+        s.execute('DELETE FROM sessions WHERE account=?', (account_id,))
+        event(s, admin['id'], f'Contraseña reseteada: {target["username"]}')
+    return {'password': password}
+
+
+class AdminSetActive(BaseModel):
+    active: bool
+
+
+@app.put('/api/admin/accounts/{account_id}/active')
+def admin_set_active(account_id: str, body: AdminSetActive, request: Request):
+    admin = require_admin(request)
+    if account_id == admin['id'] and not body.active:
+        raise HTTPException(400, 'No podés desactivar tu propia cuenta de administrador.')
+    with db() as s:
+        target = s.execute('SELECT id,username FROM accounts WHERE id=?', (account_id,)).fetchone()
+        if not target:
+            raise HTTPException(404, 'Cuenta no encontrada.')
+        s.execute('UPDATE accounts SET active=? WHERE id=?', (body.active, account_id))
+        if not body.active:
+            s.execute('DELETE FROM sessions WHERE account=?', (account_id,))
+        event(s, admin['id'], ('Cuenta desactivada: ' if not body.active else 'Cuenta reactivada: ') + target['username'])
+    return {'ok': True}
+
+
+@app.post('/api/admin/accounts/{account_id}/impersonate')
+def admin_impersonate(account_id: str, request: Request, response: Response):
+    admin = require_admin(request)
+    with db() as s:
+        target = s.execute('SELECT id,username,active FROM accounts WHERE id=?', (account_id,)).fetchone()
+        if not target or not target['active']:
+            raise HTTPException(404, 'Cuenta no encontrada o inactiva.')
+        token = secrets.token_urlsafe(32)
+        s.execute('INSERT INTO sessions (token,account,expires,impersonated_by) VALUES (?,?,?,?)',
+                  (token_hash(token), account_id, time.time()+28800, admin['id']))
+        event(s, admin['id'], f'Entró como: {target["username"]}')
+    secure = bool(os.getenv('VERCEL')) or os.getenv('COOKIE_SECURE') == '1'
+    response.set_cookie('ivz_admin_return', request.cookies.get('ivz_session', ''),
+                        httponly=True, samesite='strict', secure=secure, max_age=28800, path='/')
+    response.set_cookie('ivz_session', token, httponly=True, samesite='strict', secure=secure, max_age=28800, path='/')
+    return {'ok': True}
+
+
+@app.post('/api/admin/return')
+def admin_return(request: Request, response: Response):
+    return_token = request.cookies.get('ivz_admin_return', '')
+    if not return_token:
+        raise HTTPException(400, 'No hay una sesión de administrador para volver.')
+    with db() as s:
+        row = s.execute('SELECT a.id,a.role FROM accounts a JOIN sessions t ON t.account=a.id WHERE t.token=? AND t.expires>?',
+                        (token_hash(return_token), time.time())).fetchone()
+    if not row or row['role'] != 'admin':
+        response.delete_cookie('ivz_admin_return', path='/')
+        raise HTTPException(401, 'La sesión de administrador venció. Volvé a ingresar.')
+    secure = bool(os.getenv('VERCEL')) or os.getenv('COOKIE_SECURE') == '1'
+    response.set_cookie('ivz_session', return_token, httponly=True, samesite='strict', secure=secure, max_age=28800, path='/')
+    response.delete_cookie('ivz_admin_return', path='/')
+    return {'ok': True}
+
+
 @app.get('/')
 def index():
     return FileResponse(ROOT / 'index.html', headers={'Cache-Control': 'no-store, max-age=0'})
+
+
+@app.get('/admin')
+def admin_page(request: Request):
+    try:
+        user = account(request)
+    except HTTPException:
+        return FileResponse(ROOT / 'index.html', headers={'Cache-Control': 'no-store, max-age=0'})
+    if user['role'] != 'admin':
+        raise HTTPException(403, 'Necesitás permisos de administrador.')
+    return FileResponse(ROOT / 'admin.html', headers={'Cache-Control': 'no-store, max-age=0'})
 
 
 @app.get('/bridge.js')

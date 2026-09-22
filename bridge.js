@@ -77,8 +77,25 @@ function migrateEnergyUnit(state) {
   return false;
 }
 
+function showImpersonationBar() {
+  const bar = document.createElement('div');
+  bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:100000;background:#8a5a1a;color:#fff;font:13px system-ui;display:flex;align-items:center;justify-content:center;gap:14px;padding:8px 16px';
+  bar.innerHTML = '<span>Estás viendo esta cuenta como administrador.</span>';
+  const back = document.createElement('button');
+  back.textContent = 'Volver a administración';
+  back.style.cssText = 'font:inherit;cursor:pointer;border-radius:6px;border:1px solid #fff6;background:transparent;color:#fff;padding:4px 10px';
+  back.onclick = async () => {
+    back.disabled = true;
+    try { await api('admin/return', 'POST'); location.replace('/admin'); }
+    catch (e) { back.disabled = false; }
+  };
+  bar.append(back); document.body.prepend(bar);
+  document.body.style.paddingTop = '36px';
+}
+
 async function boot() {
   const data = await api('state');
+  if (data.role === 'admin' && !data.impersonating) { location.replace('/admin'); return; }
   aiAvailable = data.ai;
   CONFIG.USER.name = data.username;
   CONFIG.USER.role = data.company;
@@ -90,6 +107,7 @@ async function boot() {
   document.getElementById('profile-name').textContent = data.username;
   document.getElementById('profile-company').textContent = data.company;
   document.getElementById('profile-avatar').textContent = data.username.slice(0, 2).toUpperCase();
+  if (data.impersonating) showImpersonationBar();
   // One general template in this demo. Other frameworks are future work.
   appState.integrations.forEach(i => { if (i.id !== 'INT-XLS') { i.status = 'Not configured'; i.records = 0; i.lastSync = '—'; } });
   serverRevision = data.revision;

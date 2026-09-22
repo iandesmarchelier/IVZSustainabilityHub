@@ -1,6 +1,7 @@
 """Create a local-only demo account; never a production default password."""
 import os
 import secrets
+from datetime import datetime, timezone
 from pathlib import Path
 from .storage import db, initialize
 from .security import hash_password
@@ -15,7 +16,9 @@ def main():
             print('La cuenta demo ya existe. Ver data/acceso-demo.txt.')
             return
         password = secrets.token_urlsafe(18)
-        s.execute('INSERT INTO accounts VALUES (?, ?, ?, ?)', ('demo-local', 'demo', 'Tenant Invenzis', hash_password(password)))
+        s.execute('INSERT INTO accounts (id,username,company,password,role,active,created) VALUES (?,?,?,?,?,?,?)',
+                  ('demo-local', 'demo', 'Tenant Invenzis', hash_password(password), 'client', True,
+                   datetime.now(timezone.utc).isoformat()))
     Path('data/acceso-demo.txt').write_text('Usuario: demo\nContraseña: ' + password + '\nSólo para esta demo local.\n', encoding='utf8')
     print('Cuenta local creada. Acceso en data/acceso-demo.txt (excluido de Git).')
 

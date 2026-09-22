@@ -49,3 +49,20 @@ def initialize():
             'CREATE TABLE IF NOT EXISTS carbon_links (account TEXT PRIMARY KEY, token TEXT NOT NULL, site_map TEXT NOT NULL DEFAULT \'{}\', last_sync TEXT, last_count INTEGER)',
         ]:
             s.execute(sql)
+        _ensure_column(s, 'accounts', 'role', "role TEXT NOT NULL DEFAULT 'client'")
+        _ensure_column(s, 'accounts', 'active', 'active BOOLEAN NOT NULL DEFAULT TRUE')
+        _ensure_column(s, 'accounts', 'created', "created TEXT NOT NULL DEFAULT ''")
+        _ensure_column(s, 'sessions', 'impersonated_by', 'impersonated_by TEXT')
+
+
+def _column_exists(s, table, column):
+    if s.postgres:
+        row = s.execute('SELECT 1 FROM information_schema.columns WHERE table_name=? AND column_name=?', (table, column)).fetchone()
+    else:
+        row = next((r for r in s.execute(f'PRAGMA table_info({table})').fetchall() if r[1] == column), None)
+    return bool(row)
+
+
+def _ensure_column(s, table, column, coldef):
+    if not _column_exists(s, table, column):
+        s.execute(f'ALTER TABLE {table} ADD COLUMN {coldef}')
