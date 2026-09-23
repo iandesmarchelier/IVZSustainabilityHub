@@ -20,7 +20,7 @@ async function api(path, method = 'GET', body) {
     body: body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body)
   });
   const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'No se pudo completar la solicitud (' + response.status + ')');
+  if (!response.ok) throw Object.assign(new Error(typeof result.detail === 'string' ? result.detail : 'No se pudo completar la solicitud (' + response.status + ')'), {status: response.status});
   return result;
 }
 
@@ -108,9 +108,65 @@ async function loadState() {
   throw new Error('Los datos cambiaron mientras se cargaban. Recargá la página.');
 }
 
+/* Closed years: their measures and actuals cannot be edited until an administrator reopens them.
+   The server enforces it; the screen undoes such an edit right away instead of failing to save. */
+let closures = [], closedYears = new Set(), impersonating = false;
+async function loadClosures() { closures = await api('closures'); closedYears = new Set(closures.map(c => c.year)); }
+
+function enforceClosed() {
+  if (!closedYears.size || !savedBase) return;
+  let reverted = 0;
+  for (const kind of ROW_KINDS) {
+    const list = appState[kind] || [], seen = new Set();
+    for (let i = list.length - 1; i >= 0; i--) {
+      const row = list[i], json = savedBase.rows[kind].get(row.id), old = json && JSON.parse(json);
+      seen.add(row.id);
+      if (!closedYears.has(row.y) && !(old && closedYears.has(old.y))) continue;
+      if (json === JSON.stringify(row)) continue;
+      if (old) list[i] = old; else list.splice(i, 1);
+      reverted++;
+    }
+    for (const [id, json] of savedBase.rows[kind]) if (!seen.has(id)) { const old = JSON.parse(json); if (closedYears.has(old.y)) { list.push(old); reverted++; } }
+  }
+  if (reverted) { destroyCharts(); render(); toast('Ese año está cerrado: el cambio no se guardó.', 'warn'); }
+}
+
+function renderYears(w) {
+  const box = w.querySelector('#account-years');
+  if (!box) return;
+  const years = [...new Set(ROW_KINDS.flatMap(k => (appState[k] || []).map(r => r.y)).filter(Number.isInteger))].sort();
+  const byYear = Object.fromEntries(closures.map(c => [c.year, c]));
+  box.innerHTML = '<h4 style="margin:18px 0 4px">Cierre de años</h4><p class="muted" style="margin:0 0 6px;font-size:12.5px">Un año cerrado no se puede editar. Solo un administrador de Invenzis puede reabrirlo.</p>' +
+    years.map(y => {
+      const c = byYear[y];
+      return '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:7px 0;border-top:1px solid var(--line)"><span><b>' + y + '</b> · ' +
+        (c ? 'Cerrado el ' + esc(new Date(c.closedAt).toLocaleDateString('es')) + ' por ' + esc(c.closedBy) : 'Abierto') + '</span>' +
+        (c ? (impersonating ? '<button class="btn" data-reopen="' + y + '">Reabrir</button>' : '') : '<button class="btn" data-close="' + y + '">Cerrar año</button>') + '</div>';
+    }).join('') + '<p id="years-error" role="alert" style="color:var(--bad);min-height:18px;margin:6px 0 0"></p>';
+  box.querySelectorAll('[data-close]').forEach(b => b.onclick = () => closeYear(+b.dataset.close, b, w));
+  box.querySelectorAll('[data-reopen]').forEach(b => b.onclick = () => reopenYear(+b.dataset.reopen, b, w));
+}
+
+async function closeYear(year, button, w) {
+  const rows = ROW_KINDS.reduce((n, k) => n + (appState[k] || []).filter(r => r.y === year).length, 0);
+  if (!confirm('¿Cerrar ' + year + '? ' + fmt(rows) + ' registros.\n\nDespués no se van a poder agregar, editar ni borrar mediciones ni valores reales de ese año.')) return;
+  button.disabled = true;
+  try { await persist(); await api('closures', 'POST', {year}); await loadClosures(); renderYears(w); toast(year + ' cerrado.'); }
+  catch (e) { button.disabled = false; w.querySelector('#years-error').textContent = e.message; }
+}
+
+async function reopenYear(year, button, w) {
+  const reason = prompt('Motivo para reabrir ' + year + ' (queda registrado):');
+  if (!reason || !reason.trim()) return;
+  button.disabled = true;
+  try { await api('closures/' + year + '/reopen', 'POST', {reason: reason.trim()}); await loadClosures(); renderYears(w); toast(year + ' reabierto.'); }
+  catch (e) { button.disabled = false; w.querySelector('#years-error').textContent = e.message; }
+}
+
 async function persist() {
   if (!persistenceReady) return;
   if (saving) { await saving; return persist(); }
+  enforceClosed();
   const {any, out, next} = stateDiff();
   if (!any) return;
   saveStatus('Guardando…');
@@ -118,6 +174,7 @@ async function persist() {
     serverRevision = result.revision; savedBase = next; saveError = '';
     saveStatus('Guardado · revisión ' + serverRevision);
   }).catch(error => {
+    if (error.status === 423) return loadClosures().then(enforceClosed);  // closed from another tab
     saveError = error.message; saveStatus('Sin guardar: ' + error.message, true); throw error;
   }).finally(() => { saving = null; });
   await saving;
@@ -174,6 +231,8 @@ function showImpersonationBar() {
 
 async function boot() {
   const data = await loadState();
+  impersonating = !!data.impersonating;
+  if (data.state) await loadClosures();
   if (data.role === 'admin' && !data.impersonating) { location.replace('/admin'); return; }
   aiAvailable = data.ai;
   CONFIG.USER.name = data.username;
@@ -245,9 +304,10 @@ filterActuals = function (st, metricId, opts) {
 };
 openUserMenu = () => modal({
   title: 'Configuración de la cuenta', icon: 'settings',
-  body: '<dl class="kv"><dt>Usuario</dt><dd>' + esc(CONFIG.USER.name) + '</dd><dt>Organización</dt><dd>' + esc(CONFIG.USER.role) + '</dd></dl>',
+  body: '<dl class="kv"><dt>Usuario</dt><dd>' + esc(CONFIG.USER.name) + '</dd><dt>Organización</dt><dd>' + esc(CONFIG.USER.role) + '</dd></dl><div id="account-years"></div>',
   footer: '<button class="btn" data-close>Volver</button><button class="btn" id="account-logout"><i data-lucide="log-out"></i>Cerrar sesión</button>',
   onMount: w => {
+    renderYears(w);
     w.querySelector('#account-logout').onclick = async event => {
       const button = event.currentTarget; button.disabled = true;
       try { await persist(); await api('logout', 'POST'); persistenceReady = false; location.reload(); }

@@ -35,14 +35,15 @@ def measure_rows(site_id, hub_loc, year, summary):
     return rows
 
 
-async def sync_measures(state, site_map, token):
+async def sync_measures(state, site_map, token, skip_years=()):
     """Replace CO2E measures for every mapped (location, year) with fresh figures from IVZ Carbon.
 
+    Years in skip_years (closed in the Hub) are left as they are.
     Returns the number of Carbon-sourced rows written. Raises httpx.HTTPError on a connectivity
     or auth failure against Carbon; callers should surface that as a user-facing error.
     """
     periods = await carbon_get('/api/link/periods', token)
-    years = sorted({int(p[:4]) for p in periods})
+    years = sorted({int(p[:4]) for p in periods} - set(skip_years))
     touched, new_rows = set(), []
     for carbon_site, hub_loc in site_map.items():
         for year in years:

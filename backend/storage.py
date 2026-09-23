@@ -59,6 +59,7 @@ def initialize():
             # Measures and actuals as rows (see inventory.py); the rest of the state stays in states.body.
             'CREATE TABLE IF NOT EXISTS state_rows (account TEXT NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL, seq INTEGER NOT NULL, year INTEGER, body TEXT NOT NULL, PRIMARY KEY(account,kind,id))',
             'CREATE INDEX IF NOT EXISTS state_rows_order ON state_rows(account,kind,seq)',
+            'CREATE TABLE IF NOT EXISTS year_closures (account TEXT NOT NULL, year INTEGER NOT NULL, closed_at TEXT NOT NULL, closed_by TEXT NOT NULL, PRIMARY KEY(account,year))',
             'CREATE TABLE IF NOT EXISTS state_backups (account TEXT NOT NULL, created TEXT NOT NULL, revision INTEGER NOT NULL, body TEXT NOT NULL)',
             'CREATE TABLE IF NOT EXISTS state_uploads (account TEXT NOT NULL, batch TEXT NOT NULL, part INTEGER NOT NULL, created DOUBLE PRECISION NOT NULL, body TEXT NOT NULL, PRIMARY KEY(account,batch,part))',
         ]:

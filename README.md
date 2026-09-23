@@ -44,6 +44,8 @@ SQLite se rechaza en Vercel para evitar pérdida de datos. El despliegue y Postg
 
 Cada cuenta en el formato anterior (todo en `states`) se convierte sola la primera vez que se lee, y el bloque original queda en `state_backups`. Para volver a una versión anterior a este formato, correr antes `python -m backend.unsplit` con la misma DATABASE_URL: rearma el bloque único con los datos al día.
 
+Cierre de años: desde el menú de la cuenta, el cliente o un administrador cierra un año (`POST /api/closures`); sus mediciones y valores reales ya no se pueden agregar, editar ni borrar (423), y la sincronización con IVZ Carbon lo saltea. Solo un administrador que entra como el cliente puede reabrirlo, con un motivo que queda en los eventos (`POST /api/closures/{year}/reopen`).
+
 ## SAP BTP
 
 La aplicación ASGI es `backend.app:app`. Un despliegue Cloud Foundry puede arrancarla con `uvicorn backend.app:app --host 0.0.0.0 --port $PORT`. Adaptar base de datos, secretos e identidad corporativa antes de migrar; Python no hace automática esa migración.

@@ -381,7 +381,8 @@ async def sync_carbon(request: Request):
             raise HTTPException(422, 'Primero guardá datos en el Hub.')
         state = row['state']
         try:
-            count = await carbon_link.sync_measures(state, site_map, link['token'])
+            closed = {c['year'] for c in inventory.closures(user['id'])}
+            count = await carbon_link.sync_measures(state, site_map, link['token'], closed)
         except httpx.HTTPError as exc:
             raise HTTPException(502, 'No se pudo sincronizar con IVZ Carbon. Revisá el token o intentá más tarde.') from exc
         updated = datetime.now(timezone.utc).isoformat()
@@ -397,6 +398,40 @@ async def sync_carbon(request: Request):
             raise
         return {'lastSync': updated, 'lastCount': count}
     raise HTTPException(409, 'Otra pestaña modificó los datos durante la sincronización. Reintentá.')
+
+
+@app.get('/api/closures')
+def list_closures(request: Request):
+    return inventory.closures(account(request)['id'])
+
+
+class CloseYear(BaseModel):
+    year: int = Field(ge=1900, le=2200)
+
+
+def acting_as(user):
+    return 'Administrador de Invenzis' if user.get('impersonated_by') else user['username']
+
+
+@app.post('/api/closures')
+def close_year(body: CloseYear, request: Request):
+    user = account(request)
+    by = acting_as(user)
+    return inventory.close_year(user['id'], body.year, by, lambda s: event(s, user['id'], f'Año {body.year} cerrado por {by}'))
+
+
+class ReopenYear(BaseModel):
+    reason: str = Field(min_length=3, max_length=500)
+
+
+@app.post('/api/closures/{year}/reopen')
+def reopen_year(year: int, body: ReopenYear, request: Request):
+    user = account(request)
+    # Only an administrator, working inside the client's account, can reopen a closed year.
+    if not user.get('impersonated_by'):
+        raise HTTPException(403, 'Solo un administrador puede reabrir un año cerrado.')
+    return inventory.reopen_year(user['id'], year,
+                                 lambda s: event(s, user['id'], f'Año {year} reabierto por {acting_as(user)}. Motivo: {body.reason.strip()}'))
 
 
 @app.delete('/api/integrations/carbon')

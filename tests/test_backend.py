@@ -261,6 +261,72 @@ class DemoTests(unittest.TestCase):
         self.assertNotIn('measures', body)
         self.assertEqual([json.loads(b['body']) for b in backups], [legacy])
 
+    def test_closed_year_is_locked_until_an_admin_reopens_it(self):
+        self.login()
+        self.assertEqual(self.save().status_code, 200)
+        current = self.current()
+        r = self.client.post('/api/closures', headers=self.headers, json={'year': 2025})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()['closedBy'], 'one')
+        self.assertEqual(self.client.post('/api/closures', headers=self.headers, json={'year': 2025}).status_code, 409)
+        self.assertEqual([c['year'] for c in self.client.get('/api/closures').json()], [2025])
+        i25 = next(i for i, m in enumerate(current['state']['measures']) if m['y'] == 2025)
+        i26 = next(i for i, m in enumerate(current['state']['measures']) if m['y'] == 2026)
+        a25 = next(i for i, m in enumerate(current['state']['actuals']) if m['y'] == 2025)
+
+        def attempt(change):
+            after = json.loads(json.dumps(current['state']))
+            change(after)
+            return self.client.post('/api/state/changes', headers=self.headers, json=self.diff(current, after))
+        def edit(s): s['measures'][i25]['value'] += 1
+        def delete(s): s['actuals'].pop(a25)
+        def add(s): s['measures'].append(dict(s['measures'][i25], id='MSR-CLOSED'))
+        def move(s): s['measures'][i26]['y'] = 2025
+        for change in (edit, delete, add, move):
+            with self.subTest(change=change.__name__):
+                r = attempt(change)
+                self.assertEqual(r.status_code, 423, r.text)
+                self.assertIn('2025', r.json()['detail'])
+        full = json.loads(json.dumps(current['state']))
+        full['measures'][i25]['value'] += 1
+        self.assertEqual(self.client.put('/api/state', headers=self.headers, json={'revision': current['revision'], 'state': full}).status_code, 423)
+        self.assertEqual(self.current(), current)
+        def open_year(s): s['measures'][i26]['value'] += 1
+        self.assertEqual(attempt(open_year).status_code, 200)
+        current = self.current()
+        # Reopening: only an administrator working inside the account, with a reason.
+        self.assertEqual(self.client.post('/api/closures/2025/reopen', headers=self.headers, json={'reason': 'Corrección'}).status_code, 403)
+        with db() as s:
+            s.execute("UPDATE accounts SET role='admin' WHERE id='two'")
+        self.login('two')
+        self.assertEqual(self.client.post('/api/admin/accounts/one/impersonate', headers=self.headers).status_code, 200)
+        self.assertEqual(self.client.post('/api/closures/2025/reopen', headers=self.headers, json={'reason': ''}).status_code, 422)
+        r = self.client.post('/api/closures/2025/reopen', headers=self.headers, json={'reason': 'Dato de planta corregido'})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(self.client.get('/api/closures').json(), [])
+        self.assertTrue(any('Motivo: Dato de planta corregido' in e['action'] for e in self.client.get('/api/events').json()))
+        self.assertEqual(attempt(edit).status_code, 200)
+
+    def test_carbon_sync_leaves_closed_years_alone(self):
+        self.login(); self.assertEqual(self.save().status_code, 200)
+        loc_id = next(l['id'] for l in self.state['masterData']['locations'] if l.get('operable'))
+        self.assertEqual(self.client.post('/api/closures', headers=self.headers, json={'year': 2024}).status_code, 200)
+        before = [m for m in self.current()['state']['measures'] if m.get('measure') == 'CO2E' and m['loc'] == loc_id and m['y'] == 2024]
+
+        async def fake_carbon_get(path, token, params=None):
+            return {'/api/link/sites': [{'id': 'S1', 'name': 'Planta', 'country': 'Argentina', 'cc': 'AR'}],
+                    '/api/link/periods': ['2024-01', '2025-01'],
+                    '/api/summary': {'scopes': {'1': 1000.0, '2': 2000.0, '3': 3000.0}, 'scope2LocationKg': 2500.0}}[path]
+        with patch('backend.carbon_link.carbon_get', fake_carbon_get):
+            self.client.post('/api/integrations/carbon/connect', headers=self.headers, json={'token': 'ivzc_x'})
+            self.client.put('/api/integrations/carbon/mapping', headers=self.headers, json={'siteMap': {'S1': loc_id}})
+            r = self.client.post('/api/integrations/carbon/sync', headers=self.headers, json={})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(r.json()['lastCount'], 4)  # 2025 only
+        measures = self.current()['state']['measures']
+        self.assertEqual([m for m in measures if m.get('measure') == 'CO2E' and m['loc'] == loc_id and m['y'] == 2024], before)
+        self.assertEqual(sorted(m['id'] for m in measures if m['id'].startswith('CARBON-S1-')), ['CARBON-S1-2025-1', 'CARBON-S1-2025-2', 'CARBON-S1-2025-2L', 'CARBON-S1-2025-3'])
+
     def test_scope2_does_not_double_count(self):
         validate_state(self.state)
         for method, mid in [('Market-based', 'ENV-GHG-S2M'), ('Location-based', 'ENV-GHG-S2L')]:

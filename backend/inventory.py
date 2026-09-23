@@ -211,6 +211,7 @@ def save(user, revision, full=None, catalogue=None, changes=None, order=None, ba
                 state = dict(catalogue if catalogue is not None else body)
                 for kind in ROWS:
                     state[kind] = _merge(old[kind], changes.get(kind, {}), order.get(kind))
+            _check_closed(old, state, closed_years(s, user))
             validate_state(state)
             new_body = _dumps({k: v for k, v in state.items() if k not in ROWS})
         except (ValueError, KeyError, TypeError, AttributeError, RecursionError) as exc:
@@ -224,3 +225,55 @@ def save(user, revision, full=None, catalogue=None, changes=None, order=None, ba
         if on_saved:
             on_saved(s, current + 1)
     return {'revision': current + 1}
+
+
+# Year closing: the measures and actuals of a closed year cannot be added, edited or removed until
+# an administrator reopens it.
+CLOSED = 'El año {} está cerrado. Para cambiar sus datos, un administrador tiene que reabrirlo.'
+
+
+def closed_years(s, user):
+    return {r['year'] for r in s.execute('SELECT year FROM year_closures WHERE account=?', (user,)).fetchall()}
+
+
+def _check_closed(old, state, closed):
+    if not closed:
+        return
+    for kind in ROWS:
+        before = {item['id']: item for _, item in old[kind]}
+        after = {item['id']: item for item in state[kind]}
+        for k in before.keys() | after.keys():
+            a, b = before.get(k), after.get(k)
+            years = {x.get('y') for x in (a, b) if x} & closed
+            if years and a != b:
+                raise HTTPException(423, CLOSED.format(min(years)))
+
+
+def closures(user):
+    with db() as s:
+        rows = s.execute('SELECT year,closed_at,closed_by FROM year_closures WHERE account=? ORDER BY year', (user,)).fetchall()
+    return [{'year': r['year'], 'closedAt': r['closed_at'], 'closedBy': r['closed_by']} for r in rows]
+
+
+def close_year(user, year, by, on_saved=None):
+    now = datetime.now(timezone.utc).isoformat()
+    with db() as s:
+        row, _ = _catalogue(s, user, lock=True)  # no save can interleave
+        if not row:
+            raise HTTPException(404, 'Todavía no hay datos guardados.')
+        if year in closed_years(s, user):
+            raise HTTPException(409, f'El año {year} ya está cerrado.')
+        s.execute('INSERT INTO year_closures (account,year,closed_at,closed_by) VALUES (?,?,?,?)', (user, year, now, by))
+        if on_saved:
+            on_saved(s)
+    return {'year': year, 'closedAt': now, 'closedBy': by}
+
+
+def reopen_year(user, year, on_saved=None):
+    with db() as s:
+        _catalogue(s, user, lock=True)
+        if s.execute('DELETE FROM year_closures WHERE account=? AND year=?', (user, year)).rowcount != 1:
+            raise HTTPException(404, f'El año {year} no está cerrado.')
+        if on_saved:
+            on_saved(s)
+    return {'ok': True}
