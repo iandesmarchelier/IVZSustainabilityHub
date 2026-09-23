@@ -36,6 +36,15 @@ class Session:
     def execute(self, sql, args=()):
         return self.conn.execute(sql.replace('?', '%s') if self.postgres else sql, args)
 
+    def executemany(self, sql, rows):
+        if not rows:
+            return
+        if self.postgres:
+            with self.conn.cursor() as cursor:
+                cursor.executemany(sql.replace('?', '%s'), rows)
+        else:
+            self.conn.executemany(sql, rows)
+
 
 def initialize():
     with db() as s:
@@ -47,6 +56,11 @@ def initialize():
             'CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, account TEXT NOT NULL, action TEXT NOT NULL, created TEXT NOT NULL)',
             'CREATE TABLE IF NOT EXISTS login_limits (username TEXT PRIMARY KEY, attempts INTEGER NOT NULL, reset_at DOUBLE PRECISION NOT NULL)',
             'CREATE TABLE IF NOT EXISTS carbon_links (account TEXT PRIMARY KEY, token TEXT NOT NULL, site_map TEXT NOT NULL DEFAULT \'{}\', last_sync TEXT, last_count INTEGER)',
+            # Measures and actuals as rows (see inventory.py); the rest of the state stays in states.body.
+            'CREATE TABLE IF NOT EXISTS state_rows (account TEXT NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL, seq INTEGER NOT NULL, year INTEGER, body TEXT NOT NULL, PRIMARY KEY(account,kind,id))',
+            'CREATE INDEX IF NOT EXISTS state_rows_order ON state_rows(account,kind,seq)',
+            'CREATE TABLE IF NOT EXISTS state_backups (account TEXT NOT NULL, created TEXT NOT NULL, revision INTEGER NOT NULL, body TEXT NOT NULL)',
+            'CREATE TABLE IF NOT EXISTS state_uploads (account TEXT NOT NULL, batch TEXT NOT NULL, part INTEGER NOT NULL, created DOUBLE PRECISION NOT NULL, body TEXT NOT NULL, PRIMARY KEY(account,batch,part))',
         ]:
             s.execute(sql)
         _ensure_column(s, 'accounts', 'role', "role TEXT NOT NULL DEFAULT 'client'")

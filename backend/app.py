@@ -11,9 +11,8 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from .storage import db, initialize
 from .security import hash_password, verify_password, token_hash
-from .metrics import validate_state
 from .reports import make_report, regenerate_section, selected_sections
-from . import carbon_link
+from . import carbon_link, inventory
 from typing import Literal
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -129,14 +128,54 @@ def me(request: Request):
             'role': user['role'], 'impersonating': bool(user.get('impersonated_by'))}
 
 
+def session_info(user):
+    return {'company': user['company'], 'username': user['username'], 'ai': bool(os.getenv('GEMINI_API_KEY')),
+            'role': user['role'], 'impersonating': bool(user.get('impersonated_by'))}
+
+
 @app.get('/api/state')
 def get_state(request: Request):
+    """The whole state in one response. The screen uses the paged endpoints below instead."""
     user = account(request)
-    with db() as s:
-        row = s.execute('SELECT * FROM states WHERE account=?', (user['id'],)).fetchone()
-    return {'company': user['company'], 'username': user['username'], 'revision': row['revision'] if row else 0,
-            'state': json.loads(row['body']) if row else None, 'ai': bool(os.getenv('GEMINI_API_KEY')),
-            'role': user['role'], 'impersonating': bool(user.get('impersonated_by'))}
+    return {**session_info(user), **inventory.load(user['id'])}
+
+
+@app.get('/api/state/catalogue')
+def get_catalogue(request: Request):
+    user = account(request)
+    return {**session_info(user), **inventory.load_catalogue(user['id'])}
+
+
+@app.get('/api/state/rows')
+def get_rows(request: Request, kind: Literal['measures', 'actuals'], offset: int = 0, limit: int = 2000):
+    return inventory.load_page(account(request)['id'], kind, offset, limit)
+
+
+class StateUpload(BaseModel):
+    batch: str = Field(min_length=8, max_length=64)
+    part: int = Field(ge=0, le=10000)
+    changes: dict
+
+
+@app.post('/api/state/upload')
+def upload_state(body: StateUpload, request: Request):
+    return inventory.upload(account(request)['id'], body.batch, body.part, body.changes)
+
+
+class StateChanges(BaseModel):
+    revision: int = Field(ge=0)
+    catalogue: dict | None = None
+    changes: dict = {}
+    order: dict = {}
+    batch: str | None = Field(default=None, min_length=8, max_length=64)
+    parts: int = Field(default=0, ge=0, le=10000)
+
+
+@app.post('/api/state/changes')
+def save_changes(body: StateChanges, request: Request):
+    user = account(request)
+    return inventory.save(user['id'], body.revision, catalogue=body.catalogue, changes=body.changes, order=body.order,
+                          batch=body.batch, parts=body.parts, on_saved=lambda s, _: event(s, user['id'], 'Datos guardados'))
 
 
 class StateBody(BaseModel):
@@ -147,21 +186,7 @@ class StateBody(BaseModel):
 @app.put('/api/state')
 def put_state(body: StateBody, request: Request):
     user = account(request)
-    try:
-        validate_state(body.state)
-    except (ValueError, KeyError, TypeError, RecursionError) as exc:
-        raise HTTPException(422, 'Datos inválidos: ' + str(exc))
-    encoded = json.dumps(body.state, allow_nan=False)
-    with db() as s:
-        if body.revision == 0:
-            result = s.execute('INSERT INTO states VALUES (?, 1, ?) ON CONFLICT(account) DO NOTHING', (user['id'], encoded))
-        else:
-            result = s.execute('UPDATE states SET revision=revision+1, body=? WHERE account=? AND revision=?',
-                               (encoded, user['id'], body.revision))
-        if result.rowcount != 1:
-            raise HTTPException(409, 'Otra pestaña modificó los datos. Recargá antes de continuar.')
-        event(s, user['id'], 'Datos guardados')
-    return {'revision': body.revision+1}
+    return inventory.save(user['id'], body.revision, full=body.state, on_saved=lambda s, _: event(s, user['id'], 'Datos guardados'))
 
 
 class ReportBody(BaseModel):
@@ -177,11 +202,10 @@ class ReportBody(BaseModel):
 @app.post('/api/reports')
 async def generate_report(body: ReportBody, request: Request):
     user = account(request)
-    with db() as s:
-        row = s.execute('SELECT body, revision FROM states WHERE account=?', (user['id'],)).fetchone()
-    if not row:
+    row = inventory.load(user['id'])
+    if not row['state']:
         raise HTTPException(422, 'Primero guardá datos')
-    st = json.loads(row['body'])
+    st = row['state']
     nodes = st['masterData']['legalEntities' if body.scopeKind == 'E' else 'locations']
     if body.scope not in {x['id'] for x in nodes} and not (body.scope == 'ALL' and body.scopeKind == 'L'):
         raise HTTPException(422, 'Alcance o método inválido')
@@ -333,11 +357,11 @@ def set_carbon_mapping(body: CarbonMappingBody, request: Request):
     user = account(request)
     if not carbon_link_row(user['id']):
         raise HTTPException(404, 'Conectá IVZ Carbon primero.')
+    state = inventory.load_catalogue(user['id'])['state']
+    operable = {l['id'] for l in state['masterData']['locations'] if l.get('operable')} if state else set()
+    if any(loc not in operable for loc in body.siteMap.values()):
+        raise HTTPException(422, 'Ubicación inválida en el mapeo.')
     with db() as s:
-        row = s.execute('SELECT body FROM states WHERE account=?', (user['id'],)).fetchone()
-        operable = {l['id'] for l in json.loads(row['body'])['masterData']['locations'] if l.get('operable')} if row else set()
-        if any(loc not in operable for loc in body.siteMap.values()):
-            raise HTTPException(422, 'Ubicación inválida en el mapeo.')
         s.execute('UPDATE carbon_links SET site_map=? WHERE account=?', (json.dumps(body.siteMap), user['id']))
     return {'siteMap': body.siteMap}
 
@@ -352,23 +376,26 @@ async def sync_carbon(request: Request):
     if not site_map:
         raise HTTPException(422, 'Mapeá al menos un sitio antes de sincronizar.')
     for attempt in range(5):
-        with db() as s:
-            row = s.execute('SELECT revision, body FROM states WHERE account=?', (user['id'],)).fetchone()
-        if not row:
+        row = inventory.load(user['id'])
+        if not row['state']:
             raise HTTPException(422, 'Primero guardá datos en el Hub.')
-        state = json.loads(row['body'])
+        state = row['state']
         try:
             count = await carbon_link.sync_measures(state, site_map, link['token'])
         except httpx.HTTPError as exc:
             raise HTTPException(502, 'No se pudo sincronizar con IVZ Carbon. Revisá el token o intentá más tarde.') from exc
         updated = datetime.now(timezone.utc).isoformat()
-        with db() as s:
-            result = s.execute('UPDATE states SET revision=revision+1, body=? WHERE account=? AND revision=?',
-                               (json.dumps(state, allow_nan=False), user['id'], row['revision']))
-            if result.rowcount == 1:
-                s.execute('UPDATE carbon_links SET last_sync=?, last_count=? WHERE account=?', (updated, count, user['id']))
-                event(s, user['id'], f'IVZ Carbon sincronizado: {count} registros')
-                return {'lastSync': updated, 'lastCount': count}
+
+        def saved(s, _):
+            s.execute('UPDATE carbon_links SET last_sync=?, last_count=? WHERE account=?', (updated, count, user['id']))
+            event(s, user['id'], f'IVZ Carbon sincronizado: {count} registros')
+        try:
+            inventory.save(user['id'], row['revision'], full=state, on_saved=saved)
+        except HTTPException as exc:
+            if exc.status_code == 409:
+                continue
+            raise
+        return {'lastSync': updated, 'lastCount': count}
     raise HTTPException(409, 'Otra pestaña modificó los datos durante la sincronización. Reintentá.')
 
 
@@ -385,7 +412,8 @@ def disconnect_carbon(request: Request):
 def admin_list_accounts(request: Request):
     require_admin(request)
     with db() as s:
-        rows = s.execute('SELECT a.id,a.username,a.company,a.role,a.active,a.created,st.revision FROM accounts a '
+        rows = s.execute('SELECT a.id,a.username,a.company,a.role,a.active,a.created,st.revision,'
+                         '(SELECT COUNT(*) FROM state_rows r WHERE r.account=a.id) AS records FROM accounts a '
                          'LEFT JOIN states st ON st.account=a.id ORDER BY a.created DESC, a.username').fetchall()
     return [dict(r) for r in rows]
 

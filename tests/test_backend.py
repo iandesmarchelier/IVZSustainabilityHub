@@ -150,6 +150,117 @@ class DemoTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertFalse(self.client.get('/api/integrations/carbon').json()['connected'])
 
+    def diff(self, before, after):
+        """What the screen sends: the rest of the state if changed, changed/removed rows, the order only if it moved."""
+        body = {'revision': before['revision'], 'changes': {}, 'order': {}}
+        rest = lambda st: {k: v for k, v in st.items() if k not in ('measures', 'actuals')}
+        if rest(before['state']) != rest(after):
+            body['catalogue'] = rest(after)
+        for kind in ('measures', 'actuals'):
+            old = {x['id']: x for x in before['state'][kind]}
+            ids = [x['id'] for x in after[kind]]
+            keep = set(ids)
+            upsert = [x for x in after[kind] if old.get(x['id']) != x]
+            delete = [k for k in old if k not in keep]
+            if upsert or delete:
+                body['changes'][kind] = {'upsert': upsert, 'delete': delete}
+            if ids != [k for k in old if k in keep] + [k for k in ids if k not in old]:
+                body['order'][kind] = ids
+        return body
+
+    def paged(self):
+        cat = self.client.get('/api/state/catalogue').json()
+        state = dict(cat['state'])
+        for kind in ('measures', 'actuals'):
+            state[kind] = []
+            for offset in range(0, cat['counts'][kind], 3000):
+                page = self.client.get(f'/api/state/rows?kind={kind}&offset={offset}&limit=3000').json()
+                self.assertEqual(page['revision'], cat['revision'])
+                state[kind] += page['items']
+        return {'revision': cat['revision'], 'state': state}
+
+    def current(self):
+        data = self.client.get('/api/state').json()
+        return {'revision': data['revision'], 'state': data['state']}
+
+    def test_saving_changes_matches_saving_everything(self):
+        self.login()
+        self.assertEqual(self.save().status_code, 200)
+        current = self.current()
+        self.assertEqual(current['state'], self.state)
+        self.assertEqual(self.paged(), current)
+
+        def edit(s): s['measures'][5]['value'] = 123.0; s['actuals'][7]['value'] = 0
+        def delete(s): del s['measures'][10:30]; s['actuals'].pop(3)
+        def add(s):
+            s['measures'].append(dict(s['measures'][0], id='MSR-TEST-1', value=7.5))
+            s['actuals'].append(dict(s['actuals'][0], id='ACT-TEST-1', value=2))
+        def rest(s): s['targets'] = s['targets'][:3]; s['masterData']['locations'][0]['name'] = 'Planta renombrada'
+        def reorder(s): s['measures'].reverse()
+        def insert_middle(s): s['actuals'].insert(4, dict(s['actuals'][1], id='ACT-TEST-2', value=9))
+        for step in (edit, delete, add, rest, reorder, insert_middle):
+            with self.subTest(step=step.__name__):
+                after = json.loads(json.dumps(current['state']))
+                step(after)
+                result = self.client.post('/api/state/changes', headers=self.headers, json=self.diff(current, after))
+                self.assertEqual(result.status_code, 200, result.text)
+                current = self.current()
+                self.assertEqual(current['state'], after)
+                self.assertEqual(self.paged(), current)
+        self.assertEqual(compute(current['state'], 'ENV-GHG-TOT', 2026), compute(after, 'ENV-GHG-TOT', 2026))
+
+    def test_changes_are_atomic_and_checked(self):
+        self.login()
+        self.assertEqual(self.save().status_code, 200)
+        current = self.current()
+        bad = json.loads(json.dumps(current['state']))
+        bad['measures'][0]['loc'] = 'NO-EXISTE'
+        self.assertEqual(self.client.post('/api/state/changes', headers=self.headers, json=self.diff(current, bad)).status_code, 422)
+        stale = self.diff(current, dict(current['state'], targets=[]))
+        stale['revision'] -= 1
+        self.assertEqual(self.client.post('/api/state/changes', headers=self.headers, json=stale).status_code, 409)
+        self.assertEqual(self.client.post('/api/state/changes', headers=self.headers,
+                                          json={'revision': current['revision'], 'changes': {'measures': {'upsert': [{'value': 1}]}}}).status_code, 422)
+        self.assertEqual(self.current(), current)
+        # A large change arrives in staged parts; a missing part rejects the whole save.
+        big = json.loads(json.dumps(current['state']))
+        for row in big['measures']:
+            row['value'] += 1
+        body = self.diff(current, big)
+        upsert = body['changes']['measures'].pop('upsert')
+        chunks = [upsert[i:i + 4000] for i in range(0, len(upsert), 4000)]
+        for batch, parts in (('batch-0001', len(chunks) + 1), ('batch-0002', len(chunks))):
+            for i, chunk in enumerate(chunks):
+                r = self.client.post('/api/state/upload', headers=self.headers, json={'batch': batch, 'part': i, 'changes': {'measures': {'upsert': chunk}}})
+                self.assertEqual(r.status_code, 200, r.text)
+            body['changes']['measures']['upsert'] = []
+            body.update(batch=batch, parts=parts)
+            status = self.client.post('/api/state/changes', headers=self.headers, json=body).status_code
+            self.assertEqual(status, 409 if batch == 'batch-0001' else 200)
+            if batch == 'batch-0001':
+                self.assertEqual(self.current(), current)
+        self.assertEqual(self.current()['state'], big)
+        self.login('two')
+        self.assertIsNone(self.client.get('/api/state/catalogue').json()['state'])
+        self.assertEqual(self.client.get('/api/state/rows?kind=measures').status_code, 404)
+
+    def test_single_body_states_are_moved_to_rows_once(self):
+        with db() as s:  # the pre-split format, as production has it; one row without an id
+            legacy = json.loads(json.dumps(self.state))
+            del legacy['actuals'][0]['id']
+            s.execute('INSERT INTO states VALUES (?, 3, ?)', ('one', json.dumps(legacy)))
+        self.login()
+        migrated = self.current()
+        self.assertEqual(migrated['revision'], 3)
+        self.assertTrue(migrated['state']['actuals'][0]['id'])
+        del migrated['state']['actuals'][0]['id']
+        self.assertEqual(migrated['state'], legacy)
+        with db() as s:
+            body = json.loads(s.execute("SELECT body FROM states WHERE account='one'").fetchone()['body'])
+            backups = s.execute("SELECT body FROM state_backups WHERE account='one'").fetchall()
+        self.assertNotIn('measures', body)
+        self.assertEqual([json.loads(b['body']) for b in backups], [legacy])
+
     def test_scope2_does_not_double_count(self):
         validate_state(self.state)
         for method, mid in [('Market-based', 'ENV-GHG-S2M'), ('Location-based', 'ENV-GHG-S2L')]:

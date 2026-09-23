@@ -1,5 +1,5 @@
 /* Backend adapter. Keeps the original UI and import wizard. */
-let serverRevision = 0, savedState = '', saving = null, persistenceReady = false;
+let serverRevision = 0, savedBase = null, saving = null, persistenceReady = false;
 let saveError = '', aiAvailable = false;
 
 function buildEmptyState() {
@@ -17,7 +17,7 @@ async function api(path, method = 'GET', body) {
   const response = await fetch('/api/' + path, {
     method, credentials: 'same-origin', cache: 'no-store',
     headers: {'Content-Type': 'application/json', 'X-IVZ-Request': '1'},
-    body: body === undefined ? undefined : JSON.stringify(body)
+    body: body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body)
   });
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'No se pudo completar la solicitud (' + response.status + ')');
@@ -29,14 +29,93 @@ function saveStatus(text, failed = false) {
   if (target) { target.textContent = text; target.style.color = failed ? '#b42318' : '#356447'; }
 }
 
+/* The server keeps measures and actuals as rows: the screen loads them in pages and saves only
+   what changed, so no request carries the whole dataset (Vercel caps requests at 4.5 MB). */
+const ROW_KINDS = ['measures', 'actuals'], ROW_PAGE = 2000, PART_BYTES = 2500000;
+const EMPTY_BASE = {rest: '', rows: {measures: new Map(), actuals: new Map()}, ids: {measures: [], actuals: []}};
+
+// Changes since the last save, and the baseline to keep once they are saved. `initial` only builds the baseline.
+function stateDiff(st = appState, initial = false) {
+  const {measures, actuals, ...rest} = st;
+  const next = {rest: JSON.stringify(rest), rows: {}, ids: {}}, out = {changes: {}, order: {}};
+  let any = false;
+  if (!initial && next.rest !== savedBase.rest) { out.catalogue = next.rest; any = true; }
+  for (const kind of ROW_KINDS) {
+    const list = st[kind] || [], rows = new Map(), upsert = [];
+    for (const row of list) {
+      // Rows are saved one by one, so each needs its own id.
+      if (typeof row.id !== 'string' || !row.id || rows.has(row.id)) row.id = (kind === 'measures' ? 'MSR-' : 'ACT-') + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+      const json = JSON.stringify(row);
+      rows.set(row.id, json);
+      if (!initial && savedBase.rows[kind].get(row.id) !== json) upsert.push(json);
+    }
+    const ids = list.map(row => row.id);
+    next.rows[kind] = rows; next.ids[kind] = ids;
+    if (initial) continue;
+    const removed = [...savedBase.rows[kind].keys()].filter(id => !rows.has(id));
+    if (upsert.length || removed.length) { out.changes[kind] = {upsert, delete: removed}; any = true; }
+    // New rows go to the end on the server; send the full order only when they were placed elsewhere or rows moved.
+    const expected = savedBase.ids[kind].filter(id => rows.has(id)).concat(ids.filter(id => !savedBase.rows[kind].has(id)));
+    if (ids.some((id, i) => id !== expected[i])) { out.order[kind] = ids; any = true; }
+  }
+  return {any, out, next};
+}
+
+const rowsJson = changes => '{' + Object.entries(changes).map(([kind, c]) => JSON.stringify(kind) + ':{"upsert":[' + c.upsert.join(',') + ']' +
+  (c.delete ? ',"delete":' + JSON.stringify(c.delete) : '') + '}').join(',') + '}';
+
+async function sendChanges(out) {
+  // A large change set travels in parts; the final request names the batch and the server applies it all at once.
+  let batch = null, parts = 0, chunk = {}, chunkBytes = 0;
+  const total = Object.values(out.changes).reduce((n, c) => n + c.upsert.reduce((m, json) => m + json.length, 0), 0);
+  if (total > PART_BYTES) {
+    batch = 'b' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+    const flush = async () => {
+      if (!chunkBytes) return;
+      await api('state/upload', 'POST', '{"batch":"' + batch + '","part":' + parts + ',"changes":' + rowsJson(chunk) + '}');
+      parts++; chunk = {}; chunkBytes = 0;
+    };
+    for (const [kind, c] of Object.entries(out.changes)) {
+      for (const json of c.upsert) {
+        if (chunkBytes + json.length > PART_BYTES) await flush();
+        (chunk[kind] ??= {upsert: []}).upsert.push(json); chunkBytes += json.length;
+      }
+      c.upsert = [];
+    }
+    await flush();
+  }
+  let body = '{"revision":' + serverRevision + ',"changes":' + rowsJson(out.changes) + ',"order":' + JSON.stringify(out.order);
+  if (out.catalogue) body += ',"catalogue":' + out.catalogue;
+  if (batch) body += ',"batch":"' + batch + '","parts":' + parts;
+  return api('state/changes', 'POST', body + '}');
+}
+
+async function loadState() {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const data = await api('state/catalogue');
+    if (!data.state) return data;
+    const state = {...data.state};
+    let consistent = true;
+    for (const kind of ROW_KINDS) {
+      state[kind] = [];
+      for (let offset = 0; consistent && offset < data.counts[kind]; offset += ROW_PAGE) {
+        const page = await api('state/rows?kind=' + kind + '&offset=' + offset + '&limit=' + ROW_PAGE);
+        if (page.revision !== data.revision) consistent = false; else for (const row of page.items) state[kind].push(row);
+      }
+    }
+    if (consistent) return {...data, state};
+  }
+  throw new Error('Los datos cambiaron mientras se cargaban. Recargá la página.');
+}
+
 async function persist() {
   if (!persistenceReady) return;
   if (saving) { await saving; return persist(); }
-  const body = JSON.stringify(appState);
-  if (body === savedState) return;
+  const {any, out, next} = stateDiff();
+  if (!any) return;
   saveStatus('Guardando…');
-  saving = api('state', 'PUT', {revision: serverRevision, state: appState}).then(result => {
-    serverRevision = result.revision; savedState = body; saveError = '';
+  saving = sendChanges(out).then(result => {
+    serverRevision = result.revision; savedBase = next; saveError = '';
     saveStatus('Guardado · revisión ' + serverRevision);
   }).catch(error => {
     saveError = error.message; saveStatus('Sin guardar: ' + error.message, true); throw error;
@@ -94,13 +173,13 @@ function showImpersonationBar() {
 }
 
 async function boot() {
-  const data = await api('state');
+  const data = await loadState();
   if (data.role === 'admin' && !data.impersonating) { location.replace('/admin'); return; }
   aiAvailable = data.ai;
   CONFIG.USER.name = data.username;
   CONFIG.USER.role = data.company;
   filters.loc = 'ALL';
-  const savedJson = data.state ? JSON.stringify(data.state) : '';
+  const base = data.state ? stateDiff(data.state, true).next : EMPTY_BASE;
   const state = data.state || buildEmptyState();
   const energyMigrated = migrateEnergyUnit(state);
   init(state);
@@ -111,7 +190,7 @@ async function boot() {
   // One general template in this demo. Other frameworks are future work.
   appState.integrations.forEach(i => { if (i.id !== 'INT-XLS') { i.status = 'Not configured'; i.records = 0; i.lastSync = '—'; } });
   serverRevision = data.revision;
-  savedState = savedJson;
+  savedBase = base;
   persistenceReady = true;
   destroyCharts(); render();
   document.getElementById('boot-gate')?.remove();
@@ -178,7 +257,7 @@ openUserMenu = () => modal({
 });
 
 window.addEventListener('beforeunload', event => {
-  if (persistenceReady && JSON.stringify(appState) !== savedState) {event.preventDefault(); event.returnValue = '';}
+  if (persistenceReady && stateDiff().any) {event.preventDefault(); event.returnValue = '';}
 });
 setInterval(() => { if (persistenceReady && !saveError) persist().catch(() => {}); }, 2500);
 document.addEventListener('DOMContentLoaded', () => boot().catch(() => showLogin()));

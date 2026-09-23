@@ -87,11 +87,11 @@ function openCarbonIntegrationModal() {
           const result = await api('integrations/carbon/sync', 'POST');
           // The sync wrote directly to the server-side state; pull it back down so the
           // in-memory appState (and the revision/autosave bookkeeping in bridge.js) catch up.
-          const fresh = await api('state');
+          const fresh = await loadState();
           if (fresh.state) {
             appState.measures = fresh.state.measures;
             serverRevision = fresh.revision;
-            savedState = JSON.stringify(appState);
+            savedBase = stateDiff(appState, true).next;
           }
           await loadCarbonLink(); closeModal(); destroyCharts(); render();
           toast('Sincronizado: ' + fmt(result.lastCount) + ' registros.');

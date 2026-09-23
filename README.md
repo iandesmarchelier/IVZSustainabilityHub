@@ -40,7 +40,9 @@ Se envían indicadores calculados, nombre de empresa y alcance; no el archivo or
 
 Mantener `index.html`, `bridge.js`, `backend/`, `api/`, `requirements.txt` y `vercel.json` juntos. Configurar un proyecto sin comando de build de frontend y DATABASE_URL para una base PostgreSQL externa. COOKIE_SECURE=1; GEMINI_API_KEY y GEMINI_MODEL opcionales. Crear cuentas con `backend.manage` usando esa misma DATABASE_URL desde un entorno administrativo.
 
-SQLite se rechaza en Vercel para evitar pérdida de datos. El despliegue y PostgreSQL requieren verificación con las credenciales reales; no se han probado. Revisar límites del plan: el snapshot completo puede exceder el máximo de solicitud de Vercel con datasets grandes. Esta primera demo está orientada al dataset de ejemplo y cargas pequeñas.
+SQLite se rechaza en Vercel para evitar pérdida de datos. El despliegue y PostgreSQL requieren verificación con las credenciales reales; no se han probado. Vercel limita cada solicitud a 4,5 MB, así que los datos no viajan en un solo bloque: las mediciones y los valores reales son filas en `state_rows` (con su orden en `seq`) y el resto del estado queda en `states`. La pantalla los carga por páginas (`/api/state/catalogue`, `/api/state/rows`) y guarda solo lo que cambió (`/api/state/changes`); un cambio grande viaja en partes (`/api/state/upload`) y se aplica entero o nada. El servidor valida siempre el estado completo.
+
+Cada cuenta en el formato anterior (todo en `states`) se convierte sola la primera vez que se lee, y el bloque original queda en `state_backups`. Para volver a una versión anterior a este formato, correr antes `python -m backend.unsplit` con la misma DATABASE_URL: rearma el bloque único con los datos al día.
 
 ## SAP BTP
 
