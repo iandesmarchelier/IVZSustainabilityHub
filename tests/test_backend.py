@@ -1,6 +1,7 @@
 import json
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -19,18 +20,118 @@ class DemoTests(unittest.TestCase):
         os.environ.pop('GEMINI_API_KEY', None)
         self.client = TestClient(app).__enter__()
         self.headers = {'X-IVZ-Request': '1'}
+        self.codes = []
+        self.mailer = patch('backend.mfa.send_code', lambda email, code: self.codes.append((email, code)))
+        self.mailer.start()
         with db() as s:
-            for user in ['one', 'two']:
-                s.execute('INSERT INTO accounts VALUES (?, ?, ?, ?)', (user, user, user, hash_password('demopassword123')))
+            for user, role in [('one', 'client'), ('two', 'client'), ('boss', 'admin')]:
+                s.execute('INSERT INTO accounts (id,username,company,password,role,active,created,email) VALUES (?,?,?,?,?,?,?,?)',
+                          (user, user, user, hash_password('demopassword123'), role, True, '', user + '@example.com'))
         self.state = json.loads(Path('data/seed.json').read_text(encoding='utf8'))
 
     def tearDown(self):
+        self.mailer.stop()
         self.client.__exit__(None, None, None)
         self.tmp.cleanup()
 
-    def login(self, user='one'):
+    def password_step(self, user='one'):
         result = self.client.post('/api/login', headers=self.headers, json={'username': user, 'password': 'demopassword123'})
-        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertEqual(result.json(), {'mfa': True, 'email': user[:2] + '•••@example.com'})
+        self.assertEqual(self.codes[-1][0], user + '@example.com')
+        return self.codes[-1][1]
+
+    def verify(self, code):
+        return self.client.post('/api/login/verify', headers=self.headers, json={'code': code})
+
+    def login(self, user='one'):
+        result = self.verify(self.password_step(user))
+        self.assertEqual(result.status_code, 200, result.text)
+
+    def wrong(self, code):
+        return str((int(code) + 1) % 1_000_000).zfill(6)
+
+    def test_password_alone_does_not_open_a_session(self):
+        code = self.password_step()
+        self.assertEqual(self.client.get('/api/me').status_code, 401)
+        self.assertEqual(self.client.post('/api/login/verify', json={'code': code}).status_code, 403)  # CSRF header
+        result = self.verify(self.wrong(code))
+        self.assertEqual(result.status_code, 401)
+        self.assertIn('4 intentos', result.json()['detail'])
+        self.assertEqual(self.verify(code[:3] + ' ' + code[3:]).status_code, 200)
+        self.assertEqual(self.client.get('/api/me').json()['username'], 'one')
+        self.assertEqual(self.verify(code).status_code, 410)  # single use
+
+    def test_login_lasts_thirty_days_by_default(self):
+        self.login()
+        with db() as s:
+            expires = s.execute("SELECT expires FROM sessions WHERE account='one'").fetchone()['expires']
+        self.assertAlmostEqual(expires - time.time(), 30 * 24 * 3600, delta=60)
+        with patch('backend.app.time.time', return_value=time.time() + 29 * 24 * 3600):
+            self.assertEqual(self.client.get('/api/me').status_code, 200)
+        with patch('backend.app.time.time', return_value=time.time() + 31 * 24 * 3600):
+            self.assertEqual(self.client.get('/api/me').status_code, 401)
+
+    def test_code_attempts_are_limited(self):
+        code = self.password_step()
+        for _ in range(4):
+            self.assertEqual(self.verify(self.wrong(code)).status_code, 401)
+        self.assertEqual(self.verify(self.wrong(code)).status_code, 410)
+        self.assertEqual(self.verify(code).status_code, 410)
+        self.assertEqual(self.client.get('/api/me').status_code, 401)
+
+    def test_code_expires_and_resend_is_throttled(self):
+        first = self.password_step()
+        self.assertEqual(self.client.post('/api/login/resend', headers=self.headers, json={}).status_code, 429)
+        later = time.time() + 61
+        with patch('backend.app.time.time', return_value=later):
+            result = self.client.post('/api/login/resend', headers=self.headers, json={})
+            self.assertEqual(result.status_code, 200, result.text)
+            second = self.codes[-1][1]
+            if second != first:
+                self.assertEqual(self.verify(first).status_code, 401)
+        with patch('backend.app.time.time', return_value=later + 601):
+            self.assertEqual(self.verify(second).status_code, 410)
+            self.assertEqual(self.client.post('/api/login/resend', headers=self.headers, json={}).status_code, 410)
+
+    def test_a_code_only_opens_its_own_login(self):
+        code_one = self.password_step('one')
+        self.client.cookies.clear()
+        self.password_step('two')
+        self.assertEqual(self.verify(code_one).status_code, 401)
+
+    def test_account_without_email_cannot_log_in(self):
+        with db() as s:
+            s.execute("UPDATE accounts SET email=NULL WHERE username='one'")
+        result = self.client.post('/api/login', headers=self.headers, json={'username': 'one', 'password': 'demopassword123'})
+        self.assertEqual(result.status_code, 403)
+        self.assertIn('correo', result.json()['detail'])
+        self.assertEqual(self.codes, [])
+
+    def test_admin_manages_login_emails(self):
+        self.login('boss')
+        bad = self.client.post('/api/admin/accounts', headers=self.headers, json={'username': 'acme', 'company': 'ACME', 'email': 'no-es-un-correo'})
+        self.assertEqual(bad.status_code, 400)
+        created = self.client.post('/api/admin/accounts', headers=self.headers, json={'username': 'acme', 'company': 'ACME', 'email': ' ana@acme.com '})
+        self.assertEqual(created.status_code, 200, created.text)
+        self.assertEqual(created.json()['email'], 'ana@acme.com')
+        result = self.client.put('/api/admin/accounts/one/email', headers=self.headers, json={'email': 'nueva@example.com'})
+        self.assertEqual(result.status_code, 200, result.text)
+        emails = {a['username']: a['email'] for a in self.client.get('/api/admin/accounts').json()}
+        self.assertEqual(emails['one'], 'nueva@example.com')
+        self.assertEqual(emails['acme'], 'ana@acme.com')
+        self.client.cookies.clear()
+        self.login('two')
+        self.assertEqual(self.client.put('/api/admin/accounts/one/email', headers=self.headers, json={'email': 'x@example.com'}).status_code, 403)
+
+    def test_admin_email_bootstrap_never_overwrites(self):
+        from backend.app import bootstrap_admin
+        with patch.dict(os.environ, {'ADMIN_PASSWORD_HASH': hash_password('demopassword123'), 'ADMIN_EMAIL': 'admin@example.com'}):
+            bootstrap_admin()
+        with patch.dict(os.environ, {'ADMIN_EMAIL': 'otro@example.com'}):
+            bootstrap_admin()
+        with db() as s:
+            self.assertEqual(s.execute("SELECT email FROM accounts WHERE username='admin'").fetchone()['email'], 'admin@example.com')
 
     def save(self, revision=0):
         return self.client.put('/api/state', headers=self.headers, json={'revision': revision, 'state': self.state})

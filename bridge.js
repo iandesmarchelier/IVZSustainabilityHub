@@ -20,7 +20,7 @@ async function api(path, method = 'GET', body) {
     body: body === undefined ? undefined : JSON.stringify(body)
   });
   const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'No se pudo completar la solicitud (' + response.status + ')');
+  if (!response.ok) throw Object.assign(new Error(typeof result.detail === 'string' ? result.detail : 'No se pudo completar la solicitud (' + response.status + ')'), {status: response.status});
   return result;
 }
 
@@ -60,10 +60,47 @@ function showLogin(message = '') {
   screen.querySelector('form').onsubmit = async event => {
     event.preventDefault(); const form = event.target; const button = form.querySelector('button'); button.disabled = true;
     try {
-      await api('login', 'POST', {username: form.username.value, password: form.password.value});
-      await boot(); screen.remove();
+      const result = await api('login', 'POST', {username: form.username.value, password: form.password.value});
+      screen.remove(); showCodeStep(result.email);
     } catch (error) { screen.querySelector('#login-error').textContent = error.message; }
     finally { button.disabled = false; }
+  };
+}
+
+// Segundo paso del ingreso: el código de 6 dígitos que llega por correo.
+function showCodeStep(email) {
+  const screen = document.createElement('div');
+  screen.id = 'login-screen';
+  screen.style.cssText = 'position:fixed;inset:0;background:var(--bg);color:var(--ink);font:16px system-ui;z-index:99999;display:grid;place-items:center';
+  const link = 'font:inherit;background:none;border:0;padding:0;color:var(--accent);cursor:pointer;text-decoration:underline';
+  screen.innerHTML = '<main style="background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:44px;width:min(440px,94vw);box-shadow:var(--sh-lg)">' +
+    '<h1 style="margin:0 0 8px;font-size:26px">Verificá que sos vos</h1><p style="color:var(--ink-2);line-height:1.5;margin:0">Te enviamos un código de 6 dígitos a <b id="code-email"></b>. Vence en 10 minutos.</p>' +
+    '<form><label style="display:block;margin-top:20px">Código de verificación<input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" required style="font:600 22px ui-monospace,monospace;letter-spacing:6px;width:100%;padding:12px;border-radius:8px;border:1px solid var(--line-2);margin-top:8px"></label>' +
+    '<p id="login-error" role="alert" style="color:var(--bad);min-height:24px;margin:8px 0 0"></p>' +
+    '<button type="submit" style="font:inherit;width:100%;padding:12px;border-radius:8px;border:0;background:var(--accent);color:white;cursor:pointer;margin-top:8px">Verificar e ingresar</button></form>' +
+    '<p style="display:flex;justify-content:space-between;gap:12px;margin:18px 0 0;font-size:14px"><button type="button" id="code-resend" style="' + link + '">Reenviar código</button><button type="button" id="code-back" style="' + link + '">Volver</button></p></main>';
+  document.body.appendChild(screen);
+  const error = screen.querySelector('#login-error');
+  screen.querySelector('#code-email').textContent = email;
+  screen.querySelector('input').focus();
+  const restart = message => { screen.remove(); showLogin(message); };
+  screen.querySelector('#code-back').onclick = () => restart();
+  screen.querySelector('#code-resend').onclick = async event => {
+    event.target.disabled = true; error.textContent = '';
+    try { const result = await api('login/resend', 'POST', {}); error.style.color = 'var(--ink-2)'; error.textContent = 'Te enviamos un código nuevo a ' + result.email + '.'; }
+    catch (e) { if (e.status === 410) return restart(e.message); error.style.color = 'var(--bad)'; error.textContent = e.message; }
+    finally { event.target.disabled = false; }
+  };
+  screen.querySelector('form').onsubmit = async event => {
+    event.preventDefault(); const button = event.target.querySelector('button'); button.disabled = true;
+    error.style.color = 'var(--bad)'; error.textContent = '';
+    try {
+      await api('login/verify', 'POST', {code: event.target.code.value});
+      await boot(); screen.remove();
+    } catch (e) {
+      if (e.status === 410) return restart(e.message);
+      error.textContent = e.message; event.target.code.select();
+    } finally { button.disabled = false; }
   };
 }
 

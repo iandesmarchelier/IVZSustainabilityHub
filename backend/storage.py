@@ -47,11 +47,14 @@ def initialize():
             'CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, account TEXT NOT NULL, action TEXT NOT NULL, created TEXT NOT NULL)',
             'CREATE TABLE IF NOT EXISTS login_limits (username TEXT PRIMARY KEY, attempts INTEGER NOT NULL, reset_at DOUBLE PRECISION NOT NULL)',
             'CREATE TABLE IF NOT EXISTS carbon_links (account TEXT PRIMARY KEY, token TEXT NOT NULL, site_map TEXT NOT NULL DEFAULT \'{}\', last_sync TEXT, last_count INTEGER)',
+            'CREATE TABLE IF NOT EXISTS login_challenges (token TEXT PRIMARY KEY, account TEXT NOT NULL, code TEXT NOT NULL, expires DOUBLE PRECISION NOT NULL, '
+            'attempts INTEGER NOT NULL DEFAULT 0, sends INTEGER NOT NULL DEFAULT 1, sent_at DOUBLE PRECISION NOT NULL)',
         ]:
             s.execute(sql)
         _ensure_column(s, 'accounts', 'role', "role TEXT NOT NULL DEFAULT 'client'")
         _ensure_column(s, 'accounts', 'active', 'active BOOLEAN NOT NULL DEFAULT TRUE')
         _ensure_column(s, 'accounts', 'created', "created TEXT NOT NULL DEFAULT ''")
+        _ensure_column(s, 'accounts', 'email', 'email TEXT')
         _ensure_column(s, 'sessions', 'impersonated_by', 'impersonated_by TEXT')
 
 

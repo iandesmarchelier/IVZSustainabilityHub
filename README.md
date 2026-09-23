@@ -12,7 +12,9 @@ python -m backend.demo
 python -m uvicorn backend.app:app --host 127.0.0.1 --port 8000
 ```
 
-Abrir http://127.0.0.1:8000. El usuario y la contraseña aleatoria de prueba están en `data/acceso-demo.txt`. No publicar ese archivo. Para crear cuentas adicionales: `python -m backend.manage usuario "Empresa"` (solicita la contraseña sin mostrarla).
+Abrir http://127.0.0.1:8000. El usuario y la contraseña aleatoria de prueba están en `data/acceso-demo.txt`. No publicar ese archivo. Para crear cuentas adicionales: `python -m backend.manage usuario "Empresa" correo@empresa.com` (solicita la contraseña sin mostrarla).
+
+El ingreso tiene doble verificación: después de la contraseña se envía un código de 6 dígitos al correo de la cuenta (vence en 10 minutos, 5 intentos). En local, sin `RESEND_API_KEY`, el código se imprime en la consola del servidor. Una cuenta sin correo no puede ingresar: el administrador lo carga desde `/admin`. Una vez verificado, el ingreso dura `SESSION_HOURS` horas (por defecto 720 = 30 días; poner 8 cuando se vendan licencias).
 
 ## Qué incluye
 
@@ -38,7 +40,7 @@ Se envían indicadores calculados, nombre de empresa y alcance; no el archivo or
 
 ## Vercel
 
-Mantener `index.html`, `bridge.js`, `backend/`, `api/`, `requirements.txt` y `vercel.json` juntos. Configurar un proyecto sin comando de build de frontend y DATABASE_URL para una base PostgreSQL externa. COOKIE_SECURE=1; GEMINI_API_KEY y GEMINI_MODEL opcionales. Crear cuentas con `backend.manage` usando esa misma DATABASE_URL desde un entorno administrativo.
+Mantener `index.html`, `bridge.js`, `backend/`, `api/`, `requirements.txt` y `vercel.json` juntos. Configurar un proyecto sin comando de build de frontend y DATABASE_URL para una base PostgreSQL externa. COOKIE_SECURE=1; GEMINI_API_KEY y GEMINI_MODEL opcionales. Para el código de ingreso por correo son obligatorias `RESEND_API_KEY` y `MAIL_FROM` (remitente de un dominio verificado en Resend, ej. `IVZ Sustainability Hub <acceso@tudominio.com>`); sin ellas nadie puede ingresar en Vercel. `ADMIN_EMAIL` asigna el correo de la cuenta `admin` si todavía no tiene uno. Crear cuentas con `backend.manage` usando esa misma DATABASE_URL desde un entorno administrativo.
 
 SQLite se rechaza en Vercel para evitar pérdida de datos. El despliegue y PostgreSQL requieren verificación con las credenciales reales; no se han probado. Revisar límites del plan: el snapshot completo puede exceder el máximo de solicitud de Vercel con datasets grandes. Esta primera demo está orientada al dataset de ejemplo y cargas pequeñas.
 

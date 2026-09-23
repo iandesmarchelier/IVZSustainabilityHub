@@ -16,10 +16,12 @@ def main():
             print('La cuenta demo ya existe. Ver data/acceso-demo.txt.')
             return
         password = secrets.token_urlsafe(18)
-        s.execute('INSERT INTO accounts (id,username,company,password,role,active,created) VALUES (?,?,?,?,?,?,?)',
+        # Sin RESEND_API_KEY local, el código de verificación se imprime en la consola del servidor.
+        s.execute('INSERT INTO accounts (id,username,company,password,role,active,created,email) VALUES (?,?,?,?,?,?,?,?)',
                   ('demo-local', 'demo', 'Tenant Invenzis', hash_password(password), 'client', True,
-                   datetime.now(timezone.utc).isoformat()))
-    Path('data/acceso-demo.txt').write_text('Usuario: demo\nContraseña: ' + password + '\nSólo para esta demo local.\n', encoding='utf8')
+                   datetime.now(timezone.utc).isoformat(), 'demo@example.com'))
+    Path('data/acceso-demo.txt').write_text('Usuario: demo\nContraseña: ' + password +
+                                            '\nEl código de verificación aparece en la consola del servidor.\nSólo para esta demo local.\n', encoding='utf8')
     print('Cuenta local creada. Acceso en data/acceso-demo.txt (excluido de Git).')
 
 
