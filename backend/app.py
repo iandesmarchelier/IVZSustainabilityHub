@@ -197,6 +197,7 @@ class ReportBody(BaseModel):
     template: Literal['gen'] = 'gen'
     sections: list[str] | None = None
     useAI: bool = False
+    lang: Literal['es', 'en'] = 'es'
 
 
 @app.post('/api/reports')

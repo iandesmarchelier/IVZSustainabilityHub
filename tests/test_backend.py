@@ -84,6 +84,22 @@ class DemoTests(unittest.TestCase):
         narrow = asyncio.run(make_report(self.state, {'year':2025,'scope':'AR-BUE'}, 'Test'))
         self.assertFalse(any(b.get('kind')=='trajectory' for s in narrow['sections'] for b in s['blocks']))
 
+    def test_report_language_and_imported_target_names(self):
+        import asyncio
+        from backend.reports import make_report
+        for target in self.state['targets']:
+            target['name'] = 'Objetivo importado · ' + target['name']
+        spanish = asyncio.run(make_report(self.state, {'year':2025,'scope':'ALL'}, 'Test'))
+        english = asyncio.run(make_report(self.state, {'year':2025,'scope':'ALL','lang':'en'}, 'Test'))
+        self.assertEqual(spanish['meta']['lang'], 'es')
+        self.assertEqual(english['meta']['lang'], 'en')
+        self.assertEqual(spanish['sections'][0]['title'], '1. Resumen ejecutivo')
+        self.assertEqual(english['sections'][0]['title'], '1. Executive Summary')
+        self.assertTrue(english['sections'][0]['blocks'][0]['text'].startswith('In 2025'))
+        for report in (spanish, english):
+            text = ' '.join(b.get('text','') + b.get('cap','') for s in report['sections'] for b in s['blocks'])
+            self.assertNotIn('Objetivo importado', text)
+
     def test_objectives_follow_selected_report_sections(self):
         self.login(); self.assertEqual(self.save().status_code, 200)
         response = self.client.post('/api/reports', headers=self.headers,

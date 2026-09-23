@@ -1,9 +1,22 @@
 /* General ESG reporting: original wizard, frozen figures and section editing. */
 let selectedReportSection = null;
 
+// Fixed text of the report document, in the language the report was generated in.
+const REPORT_TEXT = {
+  es: {fy:'ejercicio', approved:'aprobado', draft:'borrador', generated:'generado el', locale:'es-AR',
+    notice:'<b>Aviso.</b> El reporte refleja la información disponible al momento de su generación. Los resultados deben ser revisados y validados antes de su publicación.',
+    contents:'Contenido', figure:'Figura', noData:'Sin datos', noTargets:'Sin objetivos configurados para el alcance y período.',
+    head:['Objetivo','Base','Actual','Meta','Unidad','Estado'], zero:'Todos los valores son cero.', noChart:'Sin datos para este gráfico.', progress:'Avance hacia la meta (%)'},
+  en: {fy:'fiscal year', approved:'approved', draft:'draft', generated:'generated on', locale:'en-GB',
+    notice:'<b>Notice.</b> This report reflects the information available at the time it was generated. Results must be reviewed and validated before publication.',
+    contents:'Contents', figure:'Figure', noData:'No data', noTargets:'No targets configured for this scope and period.',
+    head:['Target','Base','Current','Goal','Unit','Status'], zero:'All values are zero.', noChart:'No data for this chart.', progress:'Progress towards target (%)'}
+};
+const reportText = () => REPORT_TEXT[appState.report?.meta?.lang === 'en' ? 'en' : 'es'];
+
 runAiGeneration = async function() {
   const request = {year: RW.year, scope: RW.scope, scopeKind: RW.scopeKind || 'L',
-    s2: RW.s2, template: 'gen', sections: RW.sections.filter(s => s.on).map(s => s.id), useAI: !!RW.useAI};
+    s2: RW.s2, template: 'gen', sections: RW.sections.filter(s => s.on).map(s => s.id), useAI: !!RW.useAI, lang: RW.lang === 'en' ? 'en' : 'es'};
   modal({title:'Generando reporte ESG', icon:'file-text', body:
     '<div class="flexrow" style="gap:12px;align-items:center"><i data-lucide="loader-2" class="spin" style="width:22px;height:22px;color:var(--accent);flex:none"></i>' +
     '<p id="report-progress" style="margin:0">Guardando datos del período…</p></div>'});
@@ -58,22 +71,22 @@ renderReportEditor = function(el) {
 };
 
 drawReportDoc = function() {
-  const report = appState.report, doc = document.getElementById('rep-doc');
-  const cell = v => v == null ? 'Sin datos' : fmt(v,1);
+  const report = appState.report, doc = document.getElementById('rep-doc'), L = reportText();
+  const cell = v => v == null ? L.noData : fmt(v,1);
   function blockHTML(block,index,section) {
     if (block.type === 'h3') return '<h3>'+esc(block.text)+'</h3>';
-    if (block.type === 'chart') return '<figure class="rep-fig"><div class="chart-box"><canvas id="'+esc(block.id)+'"></canvas></div><figcaption class="cap">Figura · '+esc(block.cap)+'</figcaption></figure>';
+    if (block.type === 'chart') return '<figure class="rep-fig"><div class="chart-box"><canvas id="'+esc(block.id)+'"></canvas></div><figcaption class="cap">'+L.figure+' · '+esc(block.cap)+'</figcaption></figure>';
     if (block.type === 'table') {
-      if (!block.rows?.length) return '<p class="muted">Sin objetivos configurados para el alcance y período.</p>';
-      return '<div class="rep-fig" style="padding:0"><table class="tbl"><thead><tr><th>Objetivo</th><th>Base</th><th>Actual</th><th>Meta</th><th>Unidad</th><th>Estado</th></tr></thead><tbody>'+block.rows.map(t =>
+      if (!block.rows?.length) return '<p class="muted">'+L.noTargets+'</p>';
+      return '<div class="rep-fig" style="padding:0"><table class="tbl"><thead><tr>'+L.head.map(h => '<th>'+h+'</th>').join('')+'</tr></thead><tbody>'+block.rows.map(t =>
         '<tr><td>'+esc(t.name)+'</td><td>'+cell(t.base)+'</td><td>'+cell(t.current)+'</td><td>'+cell(t.goal)+'</td><td>'+esc(t.unit)+'</td><td><span class="badge '+(t.status==='On Track'?'ok':t.status==='At Risk'?'warn':t.status==='Off Track'?'bad':'')+'">'+esc(t.status)+'</span></td></tr>').join('')+'</tbody></table></div>';
     }
     return '<p contenteditable="true" data-sec="'+esc(section.id)+'" data-blk="'+index+'">'+esc(block.text)+'</p>';
   }
   doc.innerHTML = '<div class="rep-cover"><div class="flexrow" style="margin-bottom:14px"><img class="rep-logo" src="'+CONFIG.LOGO+'" alt="Invenzis"><span class="muted">IVZ Sustainability Hub · Invenzis</span></div>'+
-    '<h1>'+esc(report.meta.title)+'</h1><p class="muted">'+esc(report.meta.scopeName)+' · ejercicio '+report.meta.year+' · '+(report.meta.status==='Approved'?'aprobado':'borrador')+' generado el '+esc(new Date(report.meta.generated).toLocaleDateString('es-AR'))+'</p></div>'+
-    '<div class="disclaim"><b>Aviso.</b> El reporte refleja la información disponible al momento de su generación. Los resultados deben ser revisados y validados antes de su publicación.</div>'+
-    '<div class="rep-fig" style="background:#fff"><b>Contenido</b><ol>'+report.sections.map(s => '<li><a href="#sec-'+esc(s.id)+'">'+esc(s.title.replace(/^\d+\.\s*/,''))+'</a></li>').join('')+'</ol></div>'+
+    '<h1>'+esc(report.meta.title)+'</h1><p class="muted">'+esc(report.meta.scopeName)+' · '+L.fy+' '+report.meta.year+' · '+(report.meta.status==='Approved'?L.approved:L.draft)+' '+L.generated+' '+esc(new Date(report.meta.generated).toLocaleDateString(L.locale))+'</p></div>'+
+    '<div class="disclaim">'+L.notice+'</div>'+
+    '<div class="rep-fig" style="background:#fff"><b>'+L.contents+'</b><ol>'+report.sections.map(s => '<li><a href="#sec-'+esc(s.id)+'">'+esc(s.title.replace(/^\d+\.\s*/,''))+'</a></li>').join('')+'</ol></div>'+
     report.sections.map(s => '<section id="sec-'+esc(s.id)+'"><h2>'+esc(s.title)+'</h2>'+s.blocks.map((b,i)=>blockHTML(b,i,s)).join('')+
       '<div class="no-print" style="margin-top:6px"><button class="btn sm" data-regen="'+esc(s.id)+'">Regenerar sección</button></div></section>').join('');
   doc.querySelectorAll('[contenteditable]').forEach(p => p.oninput = e => {
@@ -86,13 +99,13 @@ drawReportDoc = function() {
 };
 
 drawReportCharts = function() {
-  const colors = [PAL.accent,PAL.teal,PAL.accent3];
+  const colors = [PAL.accent,PAL.teal,PAL.accent3], L = reportText();
   appState.report.sections.forEach(s => s.blocks.filter(b => b.type === 'chart').forEach(b => {
     const canvas = document.getElementById(b.id);
     const values = (b.datasets || []).flatMap(d => d.data);
     if (!canvas) return;
     if (!values.some(v => v !== null && v !== undefined) || (b.kind === 'donut' && !values.some(v => v > 0))) {
-      canvas.parentElement.innerHTML = '<p class="muted" style="padding:30px;text-align:center">'+(values.some(v => v === 0)?'Todos los valores son cero.':'Sin datos para este gráfico.')+'</p>';
+      canvas.parentElement.innerHTML = '<p class="muted" style="padding:30px;text-align:center">'+(values.some(v => v === 0)?L.zero:L.noChart)+'</p>';
       return;
     }
     const datasets = b.datasets.map((d,i) => ({...d,backgroundColor:b.kind==='horizontal'?(b.id==='rep-safety'?PAL.warn:PAL.teal):colors[i%colors.length]}));
@@ -113,7 +126,7 @@ drawReportCharts = function() {
       cfg = barCfg(labels,datasets,{animation:false},true);
       cfg.options.plugins.legend = {display:true,position:'bottom',labels:{boxWidth:10,font:{size:11}}};
       cfg.options.scales.x.suggestedMax = 100;
-      cfg.options.scales.x.title = {display:true,text:'Avance hacia la meta (%)'};
+      cfg.options.scales.x.title = {display:true,text:L.progress};
     }
     else cfg = barCfg(b.labels,datasets,{animation:false},b.kind === 'horizontal');
     cfg.options.animation = false;

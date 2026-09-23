@@ -2794,7 +2794,7 @@ function commitImport() {
         // Reemplaza cualquier objetivo previo del mismo indicador+ubicación en vez de apilarlo
         appState.targets = appState.targets.filter(x => !(x.metricId === row.metricId && (x.loc || "GRP") === tgtLoc));
         appState.targets.unshift({
-          id: nid("TGT"), name: "Objetivo importado · " + (m ? m.name : row.metricId), metricId: row.metricId, area: m ? m.area : "Environmental",
+          id: nid("TGT"), name: m ? m.name : row.metricId, metricId: row.metricId, area: m ? m.area : "Environmental",
           desc: "Objetivo cargado desde " + IMP.file.name, baseYear: CONFIG.BASE_YEAR,
           baseValue: computeMetric(appState, row.metricId, { year: CONFIG.BASE_YEAR, period: "FY", loc: tgtLoc }) ?? row.num,
           targetYear: row.year || 2030, targetValue: row.num, unit: g("unit") || (m ? m.unit : ""), loc: tgtLoc, createdBy: CONFIG.USER.name
@@ -2937,22 +2937,22 @@ function downloadTemplate() {
    22. PANTALLA: REPORTES
    ============================================================ */
 const REPORT_SECTIONS = [
-  { id: "exec", title: "1. Executive Summary", on: true },
-  { id: "intro", title: "2. Introduction / Reporting Scope", on: true },
-  { id: "env", title: "3. Environmental Performance", on: true },
-  { id: "climate", title: "3.1 Carbon footprint", on: true, sub: true },
-  { id: "energy", title: "3.2 Energy", on: true, sub: true },
-  { id: "water", title: "3.3 Water", on: true, sub: true },
-  { id: "waste", title: "3.4 Waste", on: true, sub: true },
-  { id: "land", title: "3.5 Land / Biodiversity", on: true, sub: true },
-  { id: "social", title: "4. Social Performance", on: true },
-  { id: "hs", title: "4.1 Health & Safety", on: true, sub: true },
-  { id: "di", title: "4.2 Diversity & Inclusion", on: true, sub: true },
-  { id: "emp", title: "4.3 Employees", on: true, sub: true },
-  { id: "gov", title: "5. Governance", on: true },
-  { id: "eco", title: "6. Economic Performance", on: true },
-  { id: "targets", title: "7. ESG Targets and Ambitions", on: true },
-  { id: "impr", title: "8. Improvement Opportunities", on: true }
+  { id: "exec", title: "1. Executive Summary", es: "1. Resumen ejecutivo", on: true },
+  { id: "intro", title: "2. Introduction / Reporting Scope", es: "2. Introducción / Alcance del reporte", on: true },
+  { id: "env", title: "3. Environmental Performance", es: "3. Desempeño ambiental", on: true },
+  { id: "climate", title: "3.1 Carbon footprint", es: "3.1 Huella de carbono", on: true, sub: true },
+  { id: "energy", title: "3.2 Energy", es: "3.2 Energía", on: true, sub: true },
+  { id: "water", title: "3.3 Water", es: "3.3 Agua", on: true, sub: true },
+  { id: "waste", title: "3.4 Waste", es: "3.4 Residuos", on: true, sub: true },
+  { id: "land", title: "3.5 Land / Biodiversity", es: "3.5 Suelo / Biodiversidad", on: true, sub: true },
+  { id: "social", title: "4. Social Performance", es: "4. Desempeño social", on: true },
+  { id: "hs", title: "4.1 Health & Safety", es: "4.1 Salud y seguridad", on: true, sub: true },
+  { id: "di", title: "4.2 Diversity & Inclusion", es: "4.2 Diversidad e inclusión", on: true, sub: true },
+  { id: "emp", title: "4.3 Employees", es: "4.3 Empleados", on: true, sub: true },
+  { id: "gov", title: "5. Governance", es: "5. Gobernanza", on: true },
+  { id: "eco", title: "6. Economic Performance", es: "6. Desempeño económico", on: true },
+  { id: "targets", title: "7. ESG Targets and Ambitions", es: "7. Objetivos y ambiciones ESG", on: true },
+  { id: "impr", title: "8. Improvement Opportunities", es: "8. Oportunidades de mejora", on: true }
 ];
 
 const REPORT_TEMPLATES = [
@@ -2998,7 +2998,7 @@ function viewReportes(el) {
 /* ---------- WIZARD DEL GENERADOR ---------- */
 let RW = null;
 function openReportWizard() {
-  RW = { step: 1, year: filters.year, scope: "ALL", scopeKind: "L", s2: filters.s2, template: "gen", sections: REPORT_SECTIONS.map(s => ({ ...s })), useAI: false };
+  RW = { step: 1, year: filters.year, scope: "ALL", scopeKind: "L", s2: filters.s2, template: "gen", sections: REPORT_SECTIONS.map(s => ({ ...s })), useAI: false, lang: "es" };
   drawReportWizard();
 }
 function drawReportWizard() {
@@ -3024,9 +3024,12 @@ function drawReportWizard() {
       '<div class="card-b"><div class="k-ico" style="margin-bottom:9px"><i data-lucide="file-text"></i></div><b style="font-size:13px">' + t.name + '</b>' +
       '<p class="muted" style="margin:5px 0 0;font-size:12px">' + t.desc + "</p></div></div>").join("") + "</div>";
   } else {
-    body = '<p class="muted" style="margin-top:0">Elegí las secciones a incluir en el borrador.</p>' +
+    body = '<div class="field"><label>Idioma del reporte</label><div class="grid g2" style="gap:8px">' +
+      '<label class="chk"><input type="radio" name="rw-lang" data-rlang="es"' + (RW.lang !== "en" ? " checked" : "") + '><span>Español</span></label>' +
+      '<label class="chk"><input type="radio" name="rw-lang" data-rlang="en"' + (RW.lang === "en" ? " checked" : "") + '><span>English</span></label></div></div>' +
+      '<p class="muted" style="margin-top:0">Elegí las secciones a incluir en el borrador.</p>' +
       '<div class="grid g2" style="gap:2px">' + RW.sections.map((s, i) =>
-        '<label class="chk"' + (s.sub ? ' style="padding-left:26px"' : "") + '><input type="checkbox" data-rs="' + i + '"' + (s.on ? " checked" : "") + "><span>" + esc(s.title) + "</span></label>").join("") + "</div>" +
+        '<label class="chk"' + (s.sub ? ' style="padding-left:26px"' : "") + '><input type="checkbox" data-rs="' + i + '"' + (s.on ? " checked" : "") + "><span>" + esc(RW.lang === "en" ? s.title : s.es) + "</span></label>").join("") + "</div>" +
       (typeof aiAvailable !== "undefined" && aiAvailable ? '<div class="field" style="margin-top:16px"><label>Resumen ejecutivo</label>' +
         '<div class="grid g2" style="gap:8px">' +
         '<label class="chk"><input type="radio" name="rw-ai" data-rai="0"' + (!RW.useAI ? " checked" : "") + '><span>Plantilla estándar</span></label>' +
@@ -3044,6 +3047,7 @@ function drawReportWizard() {
       $$("[data-rt]", w).forEach(c => c.onclick = () => { RW.template = c.dataset.rt; drawReportWizard(); });
       $$("[data-rs]", w).forEach(c => c.onchange = e => RW.sections[+e.target.dataset.rs].on = e.target.checked);
       $$("[data-rai]", w).forEach(r => r.onchange = e => { RW.useAI = e.target.dataset.rai === "1"; });
+      $$("[data-rlang]", w).forEach(r => r.onchange = e => { RW.lang = e.target.dataset.rlang; drawReportWizard(); });
       const back = $("#rw-back", w); if (back) back.onclick = () => { RW.step--; drawReportWizard(); };
       $("#rw-next", w).onclick = () => {
         if (RW.step === 2) { const v = $("#rw-scope", w).value; RW.scopeKind = v[0]; RW.scope = v.slice(2); }
@@ -3406,7 +3410,7 @@ function init(initialState) {
 if (location.protocol === 'file:') {
   document.body.innerHTML = '<main style="font-family:Arial,sans-serif;max-width:640px;margin:12vh auto;padding:32px;background:white;border-radius:16px"><h1>IVZ Sustainability Hub</h1><p>La aplicación funciona con el servidor Python. Abrí el siguiente enlace para acceder a tus pantallas y datos guardados.</p><p><a href="http://127.0.0.1:8000/" style="font-size:20px">Abrir IVZ Sustainability Hub</a></p><p>Si no abre, iniciá el servidor con iniciar-demo.ps1 desde la carpeta del proyecto.</p></main>';
 } else {
-  document.write('<script src="/bridge.js?v=20260923-closing"><\/script><script src="/reports-ui.js?v=20260916-reports"><\/script><script src="/carbon-integration-ui.js?v=20260923-rows"><\/script><script src="/world.js?v=20260923-globe"><\/script><script src="/globe.js?v=20260923-globe"><\/script><script src="/map-ui.js?v=20260923-globe"><\/script>');
+  document.write('<script src="/bridge.js?v=20260923-closing"><\/script><script src="/reports-ui.js?v=20260923-lang"><\/script><script src="/carbon-integration-ui.js?v=20260923-rows"><\/script><script src="/world.js?v=20260923-globe"><\/script><script src="/globe.js?v=20260923-globe"><\/script><script src="/map-ui.js?v=20260923-globe"><\/script>');
 }
 </script></body>
 </html>
