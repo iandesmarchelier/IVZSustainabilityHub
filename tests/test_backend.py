@@ -21,7 +21,7 @@ class DemoTests(unittest.TestCase):
         self.headers = {'X-IVZ-Request': '1'}
         with db() as s:
             for user in ['one', 'two']:
-                s.execute('INSERT INTO accounts VALUES (?, ?, ?, ?)', (user, user, user, hash_password('demopassword123')))
+                s.execute('INSERT INTO accounts (id,username,company,password) VALUES (?, ?, ?, ?)', (user, user, user, hash_password('demopassword123')))
         self.state = json.loads(Path('data/seed.json').read_text(encoding='utf8'))
 
     def tearDown(self):
