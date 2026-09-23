@@ -574,4 +574,20 @@ def carbon_integration_ui():
     return FileResponse(ROOT / 'carbon-integration-ui.js', media_type='text/javascript', headers={'Cache-Control': 'no-store, max-age=0'})
 
 
+@app.get('/globe.js')
+def globe_js():
+    return FileResponse(ROOT / 'globe.js', media_type='text/javascript', headers={'Cache-Control': 'no-store, max-age=0'})
+
+
+@app.get('/map-ui.js')
+def map_ui():
+    return FileResponse(ROOT / 'map-ui.js', media_type='text/javascript', headers={'Cache-Control': 'no-store, max-age=0'})
+
+
+@app.get('/world.js')
+def world_js():
+    # Static country outlines; the page requests it with a version query, so it can be cached.
+    return FileResponse(ROOT / 'world.js', media_type='text/javascript', headers={'Cache-Control': 'public, max-age=86400'})
+
+
 import httpx

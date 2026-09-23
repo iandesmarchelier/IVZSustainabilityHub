@@ -405,12 +405,12 @@ const LOCATIONS = [
   { id: "AR", name: "Argentina", parent: "GRP", type: "País", country: "AR", countryName: "Argentina", entity: "LE-110", validFrom: "2018-01-01", operable: false },
   { id: "UY", name: "Uruguay", parent: "GRP", type: "País", country: "UY", countryName: "Uruguay", entity: "LE-210", validFrom: "2018-01-01", operable: false },
   { id: "BR", name: "Brasil", parent: "GRP", type: "País", country: "BR", countryName: "Brasil", entity: "LE-310", validFrom: "2019-04-01", operable: false },
-  { id: "AR-BUE", name: "Planta Buenos Aires", parent: "AR", type: "Planta", country: "AR", countryName: "Argentina", entity: "LE-110", validFrom: "2018-01-01", operable: true, employees: 1420 },
-  { id: "AR-COR", name: "Planta Córdoba", parent: "AR", type: "Planta", country: "AR", countryName: "Argentina", entity: "LE-110", validFrom: "2018-01-01", operable: true, employees: 860 },
-  { id: "AR-ROS", name: "Centro Logístico Rosario", parent: "AR", type: "Logística", country: "AR", countryName: "Argentina", entity: "LE-110", validFrom: "2020-07-01", operable: true, employees: 240 },
-  { id: "UY-MVD", name: "Planta Montevideo", parent: "UY", type: "Planta", country: "UY", countryName: "Uruguay", entity: "LE-210", validFrom: "2018-01-01", operable: true, employees: 610 },
-  { id: "BR-SAO", name: "Planta São Paulo", parent: "BR", type: "Planta", country: "BR", countryName: "Brasil", entity: "LE-310", validFrom: "2019-04-01", operable: true, employees: 1780 },
-  { id: "BR-CAM", name: "Centro de Distribución Campinas", parent: "BR", type: "Logística", country: "BR", countryName: "Brasil", entity: "LE-310", validFrom: "2021-02-01", operable: true, employees: 320 }
+  { id: "AR-BUE", name: "Planta Buenos Aires", parent: "AR", type: "Planta", country: "AR", countryName: "Argentina", entity: "LE-110", validFrom: "2018-01-01", operable: true, employees: 1420, lat: -34.6037, lon: -58.3816 },
+  { id: "AR-COR", name: "Planta Córdoba", parent: "AR", type: "Planta", country: "AR", countryName: "Argentina", entity: "LE-110", validFrom: "2018-01-01", operable: true, employees: 860, lat: -31.4201, lon: -64.1888 },
+  { id: "AR-ROS", name: "Centro Logístico Rosario", parent: "AR", type: "Logística", country: "AR", countryName: "Argentina", entity: "LE-110", validFrom: "2020-07-01", operable: true, employees: 240, lat: -32.9468, lon: -60.6393 },
+  { id: "UY-MVD", name: "Planta Montevideo", parent: "UY", type: "Planta", country: "UY", countryName: "Uruguay", entity: "LE-210", validFrom: "2018-01-01", operable: true, employees: 610, lat: -34.9011, lon: -56.1645 },
+  { id: "BR-SAO", name: "Planta São Paulo", parent: "BR", type: "Planta", country: "BR", countryName: "Brasil", entity: "LE-310", validFrom: "2019-04-01", operable: true, employees: 1780, lat: -23.5505, lon: -46.6333 },
+  { id: "BR-CAM", name: "Centro de Distribución Campinas", parent: "BR", type: "Logística", country: "BR", countryName: "Brasil", entity: "LE-310", validFrom: "2021-02-01", operable: true, employees: 320, lat: -22.9099, lon: -47.0626 }
 ];
 
 const DATA_SOURCES = [
@@ -1071,7 +1071,7 @@ function dataQuality() {
 /* ============================================================
    8. GRÁFICOS
    ============================================================ */
-function destroyCharts() { Object.keys(ui.charts).forEach(k => { try { ui.charts[k].destroy(); } catch (e) { } delete ui.charts[k]; }); }
+function destroyCharts() { Object.keys(ui.charts).forEach(k => { try { ui.charts[k].destroy(); } catch (e) { } delete ui.charts[k]; }); if (ui.globe) { ui.dyn.gmView = ui.globe.getView(); ui.globe.destroy(); ui.globe = null; } }
 function baseOpts(extra) {
   return Object.assign({
     responsive: true, maintainAspectRatio: false,
@@ -1132,6 +1132,7 @@ const ROUTES = [
   { id: "desempeno", name: "Desempeño ESG", icon: "bar-chart-3", group: "Panorama", crumb: ["Análisis", "Desempeño ESG"] },
   { id: "ambiciones", name: "Ambiciones y Objetivos", icon: "target", group: "Panorama", crumb: ["Análisis", "Ambiciones y Objetivos"] },
   { id: "emisiones", name: "Emisiones GEI", icon: "cloud", group: "Panorama", crumb: ["Análisis", "Emisiones GEI"] },
+  { id: "mapa", name: "Mapa ESG", icon: "globe", group: "Panorama", crumb: ["Análisis", "Mapa ESG"] },
   { id: "metricas", name: "Métricas", icon: "ruler", group: "Modelo de datos", crumb: ["Modelo de datos", "Métricas"] },
   { id: "datos", name: "Datos ESG", icon: "table-2", group: "Modelo de datos", crumb: ["Modelo de datos", "Datos ESG"] },
   { id: "maestros", name: "Datos Maestros", icon: "network", group: "Modelo de datos", crumb: ["Modelo de datos", "Datos Maestros"] },
@@ -1186,6 +1187,7 @@ const FILTER_SPEC = {
   desempeno: ["year", "period", "entity", "loc", "area", "metric", "dim"],
   ambiciones: ["area"],
   emisiones: ["year", "period", "entity", "loc", "s2", "scope", "s3cat", "custom"],
+  mapa: ["year", "period", "entity", "area"],
   metricas: ["area"],
   datos: ["year", "entity", "loc", "area"],
   maestros: [],
@@ -1256,7 +1258,7 @@ function render() {
   el.innerHTML = '<div class="sk" style="height:120px;margin-bottom:14px"></div><div class="sk" style="height:260px"></div>';
   // pequeño skeleton para que el cambio de pantalla no sea un salto seco
   setTimeout(() => {
-    const fn = { inicio: viewInicio, desempeno: viewDesempeno, ambiciones: viewAmbiciones, emisiones: viewEmisiones, metricas: viewMetricas, datos: viewDatos, maestros: viewMaestros, reportes: viewReportes, integraciones: viewIntegraciones, auditoria: viewAuditoria }[ui.route] || viewInicio;
+    const fn = { inicio: viewInicio, desempeno: viewDesempeno, ambiciones: viewAmbiciones, emisiones: viewEmisiones, mapa: viewMapa, metricas: viewMetricas, datos: viewDatos, maestros: viewMaestros, reportes: viewReportes, integraciones: viewIntegraciones, auditoria: viewAuditoria }[ui.route] || viewInicio;
     fn(el); icons();
   }, 60);
 }
@@ -2169,7 +2171,8 @@ function viewMaestros(el) {
       { k: "parent", n: "ID_NODE (padre)", get: r => '<span class="mono">' + esc(r.parent || "—") + "</span>" },
       { k: "entity", n: "ID_LEGAL_ENTITY", get: r => '<span class="mono">' + esc(r.entity) + "</span>" },
       { k: "validFrom", n: "VALID_FROM" },
-      { k: "employees", n: "FTE", r: true, get: r => r.employees ? fmt(r.employees) : "—", raw: r => r.employees || 0 }
+      { k: "employees", n: "FTE", r: true, get: r => r.employees ? fmt(r.employees) : "—", raw: r => r.employees || 0 },
+      { k: "coords", n: "Coordenadas", get: r => r.lat != null && r.lon != null && r.lat !== "" ? '<span class="mono">' + fmt(+r.lat, 3) + ", " + fmt(+r.lon, 3) + "</span>" : '<span class="muted">—</span>', raw: r => r.lat != null ? 1 : 0 }
     ], appState.masterData.locations, { key: "mdloc", per: 15, emptyBtn: false });
     body.className = "card";
   } else if (tab === "ent") {
@@ -2253,7 +2256,10 @@ function openNodeModal() {
       '<div class="frow"><div class="field"><label>Nodo padre</label><select class="sel" id="n-parent"><option value="">Sin padre (nodo raíz)</option>' + appState.masterData.locations.filter(l => !l.operable).map(l => '<option value="' + l.id + '">' + esc(l.name) + "</option>").join("") + "</select></div>" +
       '<div class="field"><label>Tipo</label><select class="sel" id="n-type"><option>Planta</option><option>Logística</option><option>Oficina</option><option>País</option><option>Grupo</option></select></div></div>' +
       '<div class="frow"><div class="field"><label>Entidad legal</label><select class="sel" id="n-ent">' + appState.masterData.legalEntities.map(e => '<option value="' + e.id + '">' + esc(e.name) + "</option>").join("") + "</select></div>" +
-      '<div class="field"><label>VALID_FROM</label><input class="inp" id="n-vf" value="2026-01-01"></div></div>',
+      '<div class="field"><label>VALID_FROM</label><input class="inp" id="n-vf" value="2026-01-01"></div></div>' +
+      '<div class="frow"><div class="field"><label>Latitud (opcional)</label><input class="inp mono" id="n-lat" placeholder="-34.6037"></div>' +
+      '<div class="field"><label>Longitud (opcional)</label><input class="inp mono" id="n-lon" placeholder="-58.3816"></div></div>' +
+      '<p class="muted" style="font-size:12px;margin:0">Las coordenadas ubican el nodo en el Mapa ESG. Si las dejás vacías, se estiman por el nombre de la ciudad o el país.</p>',
     footer: '<button class="btn" data-close>Cancelar</button><button class="btn pri" id="n-save">Crear nodo</button>',
     onMount: w => $("#n-save", w).onclick = () => {
       const id = $("#n-id", w).value.trim().toUpperCase(), name = $("#n-name", w).value.trim();
@@ -2261,7 +2267,13 @@ function openNodeModal() {
       if (appState.masterData.locations.find(l => l.id === id)) { toast("Ya existe un nodo con ese ID.", "bad"); return; }
       const parent = $("#n-parent", w).value;
       const pn = appState.masterData.locations.find(l => l.id === parent) || {};
-      appState.masterData.locations.push({ id, name, parent: parent || null, type: $("#n-type", w).value, country: pn.country || "", countryName: pn.countryName || "", entity: $("#n-ent", w).value, validFrom: $("#n-vf", w).value, operable: !["País", "Grupo"].includes($("#n-type", w).value) });
+      const node = { id, name, parent: parent || null, type: $("#n-type", w).value, country: pn.country || "", countryName: pn.countryName || "", entity: $("#n-ent", w).value, validFrom: $("#n-vf", w).value, operable: !["País", "Grupo"].includes($("#n-type", w).value) };
+      const la = parseFloat($("#n-lat", w).value.replace(",", ".")), lo = parseFloat($("#n-lon", w).value.replace(",", "."));
+      if ($("#n-lat", w).value.trim() || $("#n-lon", w).value.trim()) {
+        if (!(isFinite(la) && isFinite(lo) && Math.abs(la) <= 90 && Math.abs(lo) <= 180)) { toast("Coordenadas inválidas: latitud entre -90 y 90, longitud entre -180 y 180.", "warn"); return; }
+        node.lat = la; node.lon = lo;
+      }
+      appState.masterData.locations.push(node);
       audit("Master data updated", "Nodo creado: " + name + " (" + id + ")", "network");
       closeModal(); toast("Nodo creado en la estructura organizativa"); render();
     }
@@ -2383,6 +2395,8 @@ const FIELD_SYNONYMS = {
   loc: ["id_business_loc", "business_location", "business_loc", "ubicacion", "location", "planta", "site", "id_location"],
   name: ["name_business_loc", "name", "nombre", "descripcion", "description", "denominacion"],
   countryCode: ["country_code", "country", "pais", "cod_pais"],
+  latitude: ["latitude", "latitud", "lat"],
+  longitude: ["longitude", "longitud", "lon", "lng"],
   parent: ["id_node", "parent", "parent_id", "id_parent_node", "nodo_padre", "id_parent"],
   legalEntity: ["id_legal_entity", "legal_entity", "entidad_legal", "sociedad", "company"],
   companyCode: ["id_company_code", "company_code", "sociedad_fi"],
@@ -2413,7 +2427,7 @@ const FIELD_SYNONYMS = {
   status: ["status", "estado"]
 };
 const FIELD_LABELS = {
-  metricId: "Metric ID", measureId: "Measure ID", loc: "Business Location", name: "Nombre", countryCode: "Country Code",
+  metricId: "Metric ID", measureId: "Measure ID", loc: "Business Location", name: "Nombre", countryCode: "Country Code", latitude: "Latitud", longitude: "Longitud",
   parent: "Nodo padre (ID_NODE)", legalEntity: "Legal Entity", companyCode: "Company Code", orgUnit: "Org Unit",
   periodType: "Period Type", year: "Period Year", month: "Period Month", quarter: "Period Quarter", value: "Value",
   unit: "Unit", source: "Source", validFrom: "Valid From", validTo: "Valid To", targetValue: "Target Value",
@@ -2769,6 +2783,9 @@ function commitImport() {
           type: "Planta", country: g("countryCode") || "", countryName: ({ AR: "Argentina", UY: "Uruguay", BR: "Brasil" })[g("countryCode")] || String(g("countryCode") || "—"),
           entity: g("legalEntity") || "LE-100", validFrom: String(g("validFrom") || "2026-01-01").slice(0, 10), operable: true, employees: null
         };
+        const la = parseFloat(String(g("latitude") == null ? "" : g("latitude")).replace(",", ".")), lo = parseFloat(String(g("longitude") == null ? "" : g("longitude")).replace(",", "."));
+        if (isFinite(la) && isFinite(lo) && Math.abs(la) <= 90 && Math.abs(lo) <= 180) { rec.lat = la; rec.lon = lo; }
+        else if (ex && ex.lat != null) { rec.lat = ex.lat; rec.lon = ex.lon; }
         if (ex) Object.assign(ex, rec); else appState.masterData.locations.push(rec);
         n++;
       } else if (type === "targets") {
@@ -3389,7 +3406,7 @@ function init(initialState) {
 if (location.protocol === 'file:') {
   document.body.innerHTML = '<main style="font-family:Arial,sans-serif;max-width:640px;margin:12vh auto;padding:32px;background:white;border-radius:16px"><h1>IVZ Sustainability Hub</h1><p>La aplicación funciona con el servidor Python. Abrí el siguiente enlace para acceder a tus pantallas y datos guardados.</p><p><a href="http://127.0.0.1:8000/" style="font-size:20px">Abrir IVZ Sustainability Hub</a></p><p>Si no abre, iniciá el servidor con iniciar-demo.ps1 desde la carpeta del proyecto.</p></main>';
 } else {
-  document.write('<script src="/bridge.js?v=20260923-closing"><\/script><script src="/reports-ui.js?v=20260916-reports"><\/script><script src="/carbon-integration-ui.js?v=20260923-rows"><\/script>');
+  document.write('<script src="/bridge.js?v=20260923-closing"><\/script><script src="/reports-ui.js?v=20260916-reports"><\/script><script src="/carbon-integration-ui.js?v=20260923-rows"><\/script><script src="/world.js?v=20260923-globe"><\/script><script src="/globe.js?v=20260923-globe"><\/script><script src="/map-ui.js?v=20260923-globe"><\/script>');
 }
 </script></body>
 </html>

@@ -18,6 +18,7 @@ Abrir http://127.0.0.1:8000. El usuario y la contraseña aleatoria de prueba est
 
 - Acceso mediante cookie HttpOnly con caducidad, contraseña scrypt y separación de datos por cuenta.
 - Importador original Excel/CSV y sus siete plantillas; validación adicional del dataset al guardarlo en Python.
+- Mapa ESG (Panorama): globo 3D con cada ubicación operativa; para el indicador cuantitativo elegido, la altura del pin es la magnitud y el color el estado frente al objetivo, la variación interanual o el valor relativo. Si el objetivo es de un nodo superior, se aplica a la ubicación el mismo cambio relativo (métricas absolutas) o el mismo valor meta (porcentajes, promedios e intensidades). Las ubicaciones guardan `lat` y `lon` (alta de nodo, importación de datos maestros con columnas latitud/longitud, modal «Coordenadas de ubicaciones» o «Ubicar en el globo»); sin ellas se estiman por la ciudad del nombre o el país. El globo (`globe.js`, `world.js` con contornos Natural Earth de dominio público) es un canvas propio, sin servicios de mapas externos, compartido con IVZ Carbon.
 - Estado persistente en SQLite local o PostgreSQL mediante DATABASE_URL. Guardado automático cada 2,5 segundos y botón manual. Avisos de errores y conflictos entre pestañas.
 - Motor Python para indicadores anuales del reporte, selección de alcance y método de Scope 2.
 - Reporte ESG general con indicadores, comparación con el año anterior y valores faltantes explícitos.
@@ -38,7 +39,7 @@ Se envían indicadores calculados, nombre de empresa y alcance; no el archivo or
 
 ## Vercel
 
-Mantener `index.html`, `bridge.js`, `backend/`, `api/`, `requirements.txt` y `vercel.json` juntos. Configurar un proyecto sin comando de build de frontend y DATABASE_URL para una base PostgreSQL externa. COOKIE_SECURE=1; GEMINI_API_KEY y GEMINI_MODEL opcionales. Crear cuentas con `backend.manage` usando esa misma DATABASE_URL desde un entorno administrativo.
+Mantener `index.html`, `bridge.js`, `reports-ui.js`, `carbon-integration-ui.js`, `map-ui.js`, `globe.js`, `world.js`, `backend/`, `api/`, `requirements.txt` y `vercel.json` juntos. Configurar un proyecto sin comando de build de frontend y DATABASE_URL para una base PostgreSQL externa. COOKIE_SECURE=1; GEMINI_API_KEY y GEMINI_MODEL opcionales. Crear cuentas con `backend.manage` usando esa misma DATABASE_URL desde un entorno administrativo.
 
 SQLite se rechaza en Vercel para evitar pérdida de datos. El despliegue y PostgreSQL requieren verificación con las credenciales reales; no se han probado. Vercel limita cada solicitud a 4,5 MB, así que los datos no viajan en un solo bloque: las mediciones y los valores reales son filas en `state_rows` (con su orden en `seq`) y el resto del estado queda en `states`. La pantalla los carga por páginas (`/api/state/catalogue`, `/api/state/rows`) y guarda solo lo que cambió (`/api/state/changes`); un cambio grande viaja en partes (`/api/state/upload`) y se aplica entero o nada. El servidor valida siempre el estado completo.
 
