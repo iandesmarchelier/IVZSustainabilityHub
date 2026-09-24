@@ -60,6 +60,7 @@ class PostgresTests(base.DemoTests):
         self.assertGreaterEqual(len(tables), 10)
         self.assertEqual(tables - secured, set())
         self.assertEqual(dict(role), {'rolsuper': False, 'rolbypassrls': False})
+        self.assertEqual(self.client.get('/health').json()['isolation'], 'row-level-security')
 
     def test_a_query_without_the_account_filter_sees_only_its_own_rows(self):
         self.fill_both_accounts()
@@ -113,7 +114,7 @@ class PostgresTests(base.DemoTests):
 class SystemScopeTests(unittest.TestCase):
     """db(SYSTEM) skips the account's row-level security; keep it where no single account applies."""
     ROOT = Path(__file__).resolve().parent.parent / 'backend'
-    ALLOWED = {'app.py': {'bootstrap_admin', 'account', 'login', 'logout', 'admin_return'},
+    ALLOWED = {'app.py': {'bootstrap_admin', 'account', 'login', 'logout', 'admin_return', 'health'},
                'storage.py': {'initialize'}, 'manage.py': {'main'}, 'demo.py': {'main'}, 'unsplit.py': {'main'}}
     ADMIN_CHECKS = {'require_admin', 'admin_carbon_target'}
 

@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
-from .storage import SYSTEM, db, initialize
+from .storage import SYSTEM, db, initialize, isolated
 from .security import hash_password, verify_password, token_hash
 from .reports import make_report, regenerate_section, selected_sections
 from . import carbon_link, features, inventory
@@ -670,6 +670,14 @@ def admin_return(request: Request, response: Response):
     response.set_cookie('ivz_session', return_token, httponly=True, samesite='strict', secure=secure, max_age=28800, path='/')
     response.delete_cookie('ivz_admin_return', path='/')
     return {'ok': True}
+
+
+@app.get('/health')
+def health():
+    with db(SYSTEM) as s:
+        s.execute('SELECT 1')
+        return {'status': 'ok', 'database': 'postgresql' if s.postgres else 'sqlite-local',
+                'isolation': 'row-level-security' if isolated(s) else 'off'}
 
 
 @app.get('/')
