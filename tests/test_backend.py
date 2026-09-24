@@ -204,6 +204,11 @@ class DemoTests(unittest.TestCase):
             self.assertTrue(self.client.get('/api/integrations/carbon').json()['connected'])
         self.login('two')
         self.assertEqual(self.client.delete('/api/admin/accounts/one/carbon', headers=self.headers).json(), {'connected': False})
+        # The administrator renames the client's company; the client sees it under its user.
+        self.assertEqual(self.client.put('/api/admin/accounts/one/company', headers=self.headers, json={'company': '  '}).status_code, 422)
+        self.assertEqual(self.client.put('/api/admin/accounts/one/company', headers=self.headers, json={'company': 'IVZ Sustainability Hub'}).status_code, 200)
+        self.login()
+        self.assertEqual(self.client.get('/api/me').json()['company'], 'IVZ Sustainability Hub')
 
     def diff(self, before, after):
         """What the screen sends: the rest of the state if changed, changed/removed rows, the order only if it moved."""

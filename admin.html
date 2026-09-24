@@ -159,7 +159,9 @@ function carbonBox(){
 }
 function renderConfig(){
   const groups=[...new Set(cfg.sections.map(s=>s.group))];
-  cfgBody.innerHTML=`<h4>Secciones visibles</h4>
+  cfgBody.innerHTML=`<h4>Empresa</h4>
+    <div class="cfg-row"><div class="l"><input id="cfgCompany" maxlength="200" value="${esc(cfg.company||'')}"><small>Es el nombre que el cliente ve debajo de su usuario y en los reportes.</small></div><button data-company="1">Guardar</button></div>
+    <h4>Secciones visibles</h4>
     <div class="cfg-row"><div class="l">Inicio<small>Siempre visible</small></div>${toggle('','',true).replace('<button','<button disabled')}</div>
     ${groups.map(g=>cfg.sections.filter(s=>s.group===g).map(s=>`<div class="cfg-row"><div class="l">${esc(s.label)}<small>${esc(g)}${s.default?'':' · apagada por defecto'}</small></div>${toggle('sections',s.key,s.on)}</div>`).join('')).join('')}
     <h4>Integraciones</h4>
@@ -167,12 +169,19 @@ function renderConfig(){
       ${i.native&&i.on?carbonBox():''}`).join('')}`;
 }
 async function openConfig(id,name){
-  cfg=await api('/api/admin/accounts/'+id+'/settings'); cfg.id=id; cfgErr.textContent='';
+  cfg=await api('/api/admin/accounts/'+id+'/settings'); cfg.id=id; cfg.company=name; cfgErr.textContent='';
   document.getElementById('cfgTitle').textContent='Configuración de '+name;
   renderConfig(); document.getElementById('cfgDialog').showModal();
 }
 cfgBody.addEventListener('click',async e=>{
-  const sw=e.target.closest('.sw[data-kind]'), act=e.target.closest('[data-carbon]');
+  const sw=e.target.closest('.sw[data-kind]'), act=e.target.closest('[data-carbon]'), rename=e.target.closest('[data-company]');
+  if(rename){
+    cfgErr.textContent=''; rename.disabled=true;
+    try{ cfg.company=(await api('/api/admin/accounts/'+cfg.id+'/company',{method:'PUT',body:JSON.stringify({company:document.getElementById('cfgCompany').value})})).company;
+      document.getElementById('cfgTitle').textContent='Configuración de '+cfg.company; renderConfig(); }
+    catch(err){ cfgErr.textContent=err.message; rename.disabled=false; }
+    return;
+  }
   if(!sw&&!act) return;
   cfgErr.textContent='';
   const base='/api/admin/accounts/'+cfg.id;

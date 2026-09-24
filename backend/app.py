@@ -583,6 +583,23 @@ def admin_put_settings(account_id: str, body: AdminSettings, request: Request):
     return features.catalogue(current)
 
 
+class AdminCompany(BaseModel):
+    company: str = Field(min_length=1, max_length=200)
+
+
+@app.put('/api/admin/accounts/{account_id}/company')
+def admin_set_company(account_id: str, body: AdminCompany, request: Request):
+    admin = require_admin(request)
+    company = body.company.strip()
+    if not company:
+        raise HTTPException(422, 'Ingresá el nombre de la empresa.')
+    with db() as s:
+        target = admin_target(s, account_id)
+        s.execute('UPDATE accounts SET company=? WHERE id=?', (company, account_id))
+        event(s, admin['id'], f'Empresa de {target["username"]}: {company}')
+    return {'company': company}
+
+
 def admin_carbon_target(request, account_id):
     admin = require_admin(request)
     with db() as s:
