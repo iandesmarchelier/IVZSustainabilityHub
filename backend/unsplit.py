@@ -6,16 +6,16 @@ The rows stay in state_rows too, so the current version keeps working if it is r
 """
 import json
 from .inventory import load
-from .storage import db, initialize
+from .storage import SYSTEM, db, initialize
 
 
 def main():
     initialize()
-    with db() as s:
+    with db(SYSTEM) as s:
         users = [r['account'] for r in s.execute('SELECT account FROM states').fetchall()]
     for user in users:
         state = load(user)['state']
-        with db() as s:
+        with db(user) as s:
             s.execute('UPDATE states SET body=? WHERE account=?', (json.dumps(state, allow_nan=False), user))
     print(f'{len(users)} cuentas vueltas al formato de un solo bloque.')
 

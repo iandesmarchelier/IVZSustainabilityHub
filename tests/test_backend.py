@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 from fastapi.testclient import TestClient
 from backend.app import app
-from backend.storage import db
+from backend.storage import SYSTEM, db
 from backend.security import hash_password
 from backend.metrics import compute, validate_state
 
@@ -17,15 +17,20 @@ class DemoTests(unittest.TestCase):
         os.environ['SQLITE_PATH'] = str(Path(self.tmp.name) / 'test.sqlite')
         os.environ.pop('DATABASE_URL', None)
         os.environ.pop('GEMINI_API_KEY', None)
+        self.use_database()
         self.client = TestClient(app).__enter__()
         self.headers = {'X-IVZ-Request': '1'}
-        with db() as s:
+        with db(SYSTEM) as s:
             for user in ['one', 'two']:
                 s.execute('INSERT INTO accounts (id,username,company,password) VALUES (?, ?, ?, ?)', (user, user, user, hash_password('demopassword123')))
         self.state = json.loads(Path('data/seed.json').read_text(encoding='utf8'))
 
+    def use_database(self):
+        """SQLite here; tests/test_isolation.py runs these same tests on PostgreSQL with row-level security."""
+
     def tearDown(self):
         self.client.__exit__(None, None, None)
+        os.environ.pop('DATABASE_URL', None)
         self.tmp.cleanup()
 
     def login(self, user='one'):
@@ -167,7 +172,7 @@ class DemoTests(unittest.TestCase):
         self.assertFalse(self.client.get('/api/integrations/carbon').json()['connected'])
 
     def test_admin_switches_sections_and_integrations_per_account(self):
-        with db() as s:
+        with db(SYSTEM) as s:
             s.execute("UPDATE accounts SET role='admin' WHERE id='two'")
         self.login(); self.assertEqual(self.save().status_code, 200)
         info = self.client.get('/api/state/catalogue').json()['features']
@@ -305,7 +310,7 @@ class DemoTests(unittest.TestCase):
         self.assertEqual(self.client.get('/api/state/rows?kind=measures').status_code, 404)
 
     def test_single_body_states_are_moved_to_rows_once(self):
-        with db() as s:  # the pre-split format, as production has it; one row without an id
+        with db(SYSTEM) as s:  # the pre-split format, as production has it; one row without an id
             legacy = json.loads(json.dumps(self.state))
             del legacy['actuals'][0]['id']
             s.execute('INSERT INTO states VALUES (?, 3, ?)', ('one', json.dumps(legacy)))
@@ -315,7 +320,7 @@ class DemoTests(unittest.TestCase):
         self.assertTrue(migrated['state']['actuals'][0]['id'])
         del migrated['state']['actuals'][0]['id']
         self.assertEqual(migrated['state'], legacy)
-        with db() as s:
+        with db(SYSTEM) as s:
             body = json.loads(s.execute("SELECT body FROM states WHERE account='one'").fetchone()['body'])
             backups = s.execute("SELECT body FROM state_backups WHERE account='one'").fetchall()
         self.assertNotIn('measures', body)
@@ -356,7 +361,7 @@ class DemoTests(unittest.TestCase):
         current = self.current()
         # Reopening: only an administrator working inside the account, with a reason.
         self.assertEqual(self.client.post('/api/closures/2025/reopen', headers=self.headers, json={'reason': 'Corrección'}).status_code, 403)
-        with db() as s:
+        with db(SYSTEM) as s:
             s.execute("UPDATE accounts SET role='admin' WHERE id='two'")
         self.login('two')
         self.assertEqual(self.client.post('/api/admin/accounts/one/impersonate', headers=self.headers).status_code, 200)
@@ -386,6 +391,13 @@ class DemoTests(unittest.TestCase):
         measures = self.current()['state']['measures']
         self.assertEqual([m for m in measures if m.get('measure') == 'CO2E' and m['loc'] == loc_id and m['y'] == 2024], before)
         self.assertEqual(sorted(m['id'] for m in measures if m['id'].startswith('CARBON-S1-')), ['CARBON-S1-2025-1', 'CARBON-S1-2025-2', 'CARBON-S1-2025-2L', 'CARBON-S1-2025-3'])
+
+    def test_every_connection_names_its_account(self):
+        with self.assertRaises(TypeError), db():
+            pass
+        for bad in ('', None, 7):
+            with self.subTest(account=bad), self.assertRaises(ValueError), db(bad):
+                pass
 
     def test_scope2_does_not_double_count(self):
         validate_state(self.state)

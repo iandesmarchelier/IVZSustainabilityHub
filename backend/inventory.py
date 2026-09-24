@@ -77,7 +77,7 @@ def _delete(s, user, kind, ids):
 
 def load(user):
     """The complete state, as the single-body format stored it: {'revision', 'state'}."""
-    with db() as s:
+    with db(user) as s:
         row, body = _catalogue(s, user)
         if not row:
             return {'revision': 0, 'state': None}
@@ -86,7 +86,7 @@ def load(user):
 
 
 def load_catalogue(user):
-    with db() as s:
+    with db(user) as s:
         row, body = _catalogue(s, user)
         if not row:
             return {'revision': 0, 'state': None, 'counts': {}}
@@ -98,7 +98,7 @@ def load_catalogue(user):
 def load_page(user, kind, offset, limit):
     if kind not in ROWS:
         raise HTTPException(422, 'Tipo de dato desconocido.')
-    with db() as s:
+    with db(user) as s:
         row, _ = _catalogue(s, user)
         if not row:
             raise HTTPException(404, 'Todavía no hay datos guardados.')
@@ -123,7 +123,7 @@ def _check_changes(changes, staged=False):
 def upload(user, batch, part, changes):
     """Stage part of a change set too large for one request; the save that names the batch applies it."""
     _check_changes(changes, staged=True)
-    with db() as s:
+    with db(user) as s:
         s.execute('DELETE FROM state_uploads WHERE created<?', (time.time() - UPLOAD_TTL,))
         s.execute('DELETE FROM state_uploads WHERE account=? AND batch=? AND part=?', (user, batch, part))
         s.execute('INSERT INTO state_uploads (account,batch,part,created,body) VALUES (?,?,?,?,?)',
@@ -182,7 +182,7 @@ def save(user, revision, full=None, catalogue=None, changes=None, order=None, ba
         _check_changes(changes)
         if not isinstance(order, dict) or set(order) - set(ROWS):
             raise HTTPException(422, 'Orden de registros inválido.')
-    with db() as s:
+    with db(user) as s:
         row, body = _catalogue(s, user, lock=True)
         current = row['revision'] if row else 0
         if revision != current:
@@ -250,14 +250,14 @@ def _check_closed(old, state, closed):
 
 
 def closures(user):
-    with db() as s:
+    with db(user) as s:
         rows = s.execute('SELECT year,closed_at,closed_by FROM year_closures WHERE account=? ORDER BY year', (user,)).fetchall()
     return [{'year': r['year'], 'closedAt': r['closed_at'], 'closedBy': r['closed_by']} for r in rows]
 
 
 def close_year(user, year, by, on_saved=None):
     now = datetime.now(timezone.utc).isoformat()
-    with db() as s:
+    with db(user) as s:
         row, _ = _catalogue(s, user, lock=True)  # no save can interleave
         if not row:
             raise HTTPException(404, 'Todavía no hay datos guardados.')
@@ -270,7 +270,7 @@ def close_year(user, year, by, on_saved=None):
 
 
 def reopen_year(user, year, on_saved=None):
-    with db() as s:
+    with db(user) as s:
         _catalogue(s, user, lock=True)
         if s.execute('DELETE FROM year_closures WHERE account=? AND year=?', (user, year)).rowcount != 1:
             raise HTTPException(404, f'El año {year} no está cerrado.')

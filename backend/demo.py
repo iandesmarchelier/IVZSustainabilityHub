@@ -3,7 +3,7 @@ import os
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
-from .storage import db, initialize
+from .storage import SYSTEM, db, initialize
 from .security import hash_password
 
 
@@ -11,7 +11,7 @@ def main():
     if os.getenv('DATABASE_URL') or os.getenv('VERCEL'):
         raise SystemExit('Este comando sólo crea una cuenta en SQLite local.')
     initialize()
-    with db() as s:
+    with db(SYSTEM) as s:
         if s.execute('SELECT id FROM accounts WHERE username=?', ('demo',)).fetchone():
             print('La cuenta demo ya existe. Ver data/acceso-demo.txt.')
             return

@@ -46,6 +46,8 @@ SQLite se rechaza en Vercel para evitar pérdida de datos. El despliegue y Postg
 
 Cada cuenta en el formato anterior (todo en `states`) se convierte sola la primera vez que se lee, y el bloque original queda en `state_backups`. Para volver a una versión anterior a este formato, correr antes `python -m backend.unsplit` con la misma DATABASE_URL: rearma el bloque único con los datos al día.
 
+Aislamiento entre clientes: además del filtro por cuenta de cada consulta, PostgreSQL lo hace cumplir con row-level security. Cada conexión nombra su cuenta (`db(cuenta)`; `db(SYSTEM)` queda para el ingreso, el administrador y los scripts). La de un cliente trabaja como el rol `ivz_hub_tenant`, que solo ve y escribe filas de esa cuenta en toda tabla con columna `account` (y su propia fila en `accounts`), aunque una consulta olvide el `WHERE account=?`. Al arrancar, la aplicación crea ese rol y las políticas que falten, así que el usuario de la base necesita permiso para crear roles (el dueño de Neon lo tiene). Si no puede, la aplicación sigue funcionando sin esa protección y lo registra en el log como «Row-level security is NOT enforced».
+
 Cierre de años: desde el menú de la cuenta, el cliente o un administrador cierra un año (`POST /api/closures`); sus mediciones y valores reales ya no se pueden agregar, editar ni borrar (423), y la sincronización con IVZ Carbon lo saltea. Solo un administrador que entra como el cliente puede reabrirlo, con un motivo que queda en los eventos (`POST /api/closures/{year}/reopen`).
 
 ## SAP BTP
@@ -61,6 +63,8 @@ node --check bridge.js
 ```
 
 Las pruebas usan SQLite temporal, dos empresas y el dataset extraído del frontend: autenticación, separación de datos/reportes, conflicto de revisión, rechazo de datos inválidos, aprobación, Scope 2 y mezcla mensual/anual por ubicación.
+
+Para probar el aislamiento en PostgreSQL, apuntar `HUB_TEST_ISOLATION_URL` a una base descartable con «test» en el nombre (las pruebas borran sus tablas). `tests/test_isolation.py` repite ahí todas las pruebas con row-level security y comprueba que una cuenta no lee ni escribe filas de otra. Sin esa variable, igual verifica que `db(SYSTEM)` solo aparezca en el ingreso, el administrador y los scripts.
 
 ## Límites de esta primera implementación
 

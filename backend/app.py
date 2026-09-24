@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
-from .storage import db, initialize
+from .storage import SYSTEM, db, initialize
 from .security import hash_password, verify_password, token_hash
 from .reports import make_report, regenerate_section, selected_sections
 from . import carbon_link, features, inventory
@@ -24,7 +24,7 @@ def bootstrap_admin():
     digest = os.getenv('ADMIN_PASSWORD_HASH')
     if not digest:
         return
-    with db() as s:
+    with db(SYSTEM) as s:
         s.execute("INSERT INTO accounts (id,username,company,password,role,active,created) VALUES (?,?,?,?,?,?,?) "
                   "ON CONFLICT(username) DO NOTHING",
                   (str(uuid.uuid4()), 'admin', 'Administración IVZ Sustainability Hub', digest, 'admin', True,
@@ -58,7 +58,7 @@ async def guard(request, call_next):
 
 def account(request):
     token = request.cookies.get('ivz_session', '')
-    with db() as s:
+    with db(SYSTEM) as s:
         row = s.execute('SELECT a.id,a.username,a.company,a.role,a.active,t.impersonated_by FROM accounts a '
                         'JOIN sessions t ON t.account=a.id WHERE t.token=? AND t.expires>?',
                         (token_hash(token), time.time())).fetchone()
@@ -87,7 +87,7 @@ class Login(BaseModel):
 @app.post('/api/login')
 def login(body: Login, response: Response):
     username = body.username.strip().lower()
-    with db() as s:
+    with db(SYSTEM) as s:
         # Atomic counter also works across serverless instances.
         now = time.time()
         row = s.execute('INSERT INTO login_limits VALUES (?, 1, ?) ON CONFLICT(username) DO UPDATE SET '
@@ -104,7 +104,7 @@ def login(body: Login, response: Response):
     if not user['active']:
         raise HTTPException(403, 'Esta cuenta fue desactivada.')
     token = secrets.token_urlsafe(32)
-    with db() as s:
+    with db(SYSTEM) as s:
         s.execute('DELETE FROM sessions WHERE expires<?', (time.time(),))
         s.execute('INSERT INTO sessions (token,account,expires) VALUES (?, ?, ?)', (token_hash(token), user['id'], time.time()+28800))
         s.execute('DELETE FROM login_limits WHERE username=?', (username,))
@@ -115,7 +115,7 @@ def login(body: Login, response: Response):
 
 @app.post('/api/logout')
 def logout(request: Request, response: Response):
-    with db() as s:
+    with db(SYSTEM) as s:
         s.execute('DELETE FROM sessions WHERE token=?', (token_hash(request.cookies.get('ivz_session', '')),))
     response.delete_cookie('ivz_session', path='/')
     return {'ok': True}
@@ -129,7 +129,7 @@ def me(request: Request):
 
 
 def switches_of(user):
-    with db() as s:
+    with db(user['id']) as s:
         return features.of(s, user['id'])
 
 
@@ -141,7 +141,7 @@ def session_info(user):
 def section_user(request, section):
     """The signed-in account, provided the administrator left this section visible for it."""
     user = account(request)
-    with db() as s:
+    with db(user['id']) as s:
         features.require(s, user['id'], 'sections', section, 'Esta sección no está habilitada para tu cuenta.')
     return user
 
@@ -151,7 +151,7 @@ CARBON_OFF = 'La integración con IVZ Carbon está desactivada para esta cuenta.
 
 def carbon_user(request):
     user = account(request)
-    with db() as s:
+    with db(user['id']) as s:
         features.require(s, user['id'], 'integrations', 'INT-IVZC', CARBON_OFF)
     return user
 
@@ -244,7 +244,7 @@ async def generate_report(body: ReportBody, request: Request):
     report['id'] = str(uuid.uuid4())
     report['meta']['dataRevision'] = row['revision']
     report['meta']['revision'] = 1
-    with db() as s:
+    with db(user['id']) as s:
         s.execute('INSERT INTO reports VALUES (?, ?, ?, ?)',
                   (report['id'], user['id'], json.dumps(report), report['meta']['generated']))
         event(s, user['id'], 'Reporte generado: ' + report['id'])
@@ -254,7 +254,7 @@ async def generate_report(body: ReportBody, request: Request):
 @app.get('/api/reports')
 def list_reports(request: Request):
     user = section_user(request, 'reportes')
-    with db() as s:
+    with db(user['id']) as s:
         rows = s.execute('SELECT body FROM reports WHERE account=? ORDER BY created DESC', (user['id'],)).fetchall()
     return [json.loads(r['body']) for r in rows]
 
@@ -262,7 +262,7 @@ def list_reports(request: Request):
 @app.put('/api/reports/{report_id}')
 def approve_report(report_id: str, body: dict, request: Request):
     user = section_user(request, 'reportes')
-    with db() as s:
+    with db(user['id']) as s:
         row = s.execute('SELECT body FROM reports WHERE id=? AND account=?', (report_id, user['id'])).fetchone()
         if not row:
             raise HTTPException(404, 'Reporte no encontrado')
@@ -304,7 +304,7 @@ def approve_report(report_id: str, body: dict, request: Request):
 @app.post('/api/reports/{report_id}/sections/{section_id}/regenerate')
 async def regenerate(report_id: str, section_id: str, request: Request):
     user = section_user(request, 'reportes')
-    with db() as s:
+    with db(user['id']) as s:
         row = s.execute('SELECT body FROM reports WHERE id=? AND account=?', (report_id, user['id'])).fetchone()
     if not row:
         raise HTTPException(404, 'Reporte no encontrado')
@@ -319,7 +319,7 @@ async def regenerate(report_id: str, section_id: str, request: Request):
     report['meta']['status'] = 'Draft'
     report['meta'].pop('approvedAt', None)
     report['meta']['revision'] = report['meta'].get('revision', 0) + 1
-    with db() as s:
+    with db(user['id']) as s:
         result = s.execute('UPDATE reports SET body=? WHERE id=? AND account=? AND body=?', (json.dumps(report), report_id, user['id'], row['body']))
         if result.rowcount != 1:
             raise HTTPException(409, 'El reporte cambió durante la regeneración. Volvé a abrirlo.')
@@ -330,12 +330,12 @@ async def regenerate(report_id: str, section_id: str, request: Request):
 @app.get('/api/events')
 def list_events(request: Request):
     user = account(request)
-    with db() as s:
+    with db(user['id']) as s:
         return [dict(r) for r in s.execute('SELECT action, created FROM events WHERE account=? ORDER BY created DESC', (user['id'],)).fetchall()]
 
 
 def carbon_link_row(account_id):
-    with db() as s:
+    with db(account_id) as s:
         return s.execute('SELECT * FROM carbon_links WHERE account=?', (account_id,)).fetchone()
 
 
@@ -349,7 +349,7 @@ async def connect_carbon_account(account_id, token, by=''):
         sites = await carbon_link.fetch_sites(token)
     except httpx.HTTPError as exc:
         raise HTTPException(422, 'No se pudo validar el token de IVZ Carbon.') from exc
-    with db() as s:
+    with db(account_id) as s:
         s.execute('INSERT INTO carbon_links VALUES (?, ?, \'{}\', NULL, NULL) '
                   'ON CONFLICT(account) DO UPDATE SET token=?, site_map=\'{}\', last_sync=NULL, last_count=NULL',
                   (account_id, token, token))
@@ -391,7 +391,7 @@ def set_carbon_mapping(body: CarbonMappingBody, request: Request):
     operable = {l['id'] for l in state['masterData']['locations'] if l.get('operable')} if state else set()
     if any(loc not in operable for loc in body.siteMap.values()):
         raise HTTPException(422, 'Ubicación inválida en el mapeo.')
-    with db() as s:
+    with db(user['id']) as s:
         s.execute('UPDATE carbon_links SET site_map=? WHERE account=?', (json.dumps(body.siteMap), user['id']))
     return {'siteMap': body.siteMap}
 
@@ -468,7 +468,7 @@ def reopen_year(year: int, body: ReopenYear, request: Request):
 
 
 def disconnect_carbon_account(account_id, by=''):
-    with db() as s:
+    with db(account_id) as s:
         s.execute('DELETE FROM carbon_links WHERE account=?', (account_id,))
         event(s, account_id, 'Integración IVZ Carbon desconectada' + by)
 
@@ -482,7 +482,7 @@ def disconnect_carbon(request: Request):
 @app.get('/api/admin/accounts')
 def admin_list_accounts(request: Request):
     require_admin(request)
-    with db() as s:
+    with db(SYSTEM) as s:
         # Última actividad: the latest event of the account (saves, reports, syncs, year closings).
         rows = s.execute('SELECT a.id,a.username,a.company,a.role,a.active,a.created,'
                          '(SELECT MAX(e.created) FROM events e WHERE e.account=a.id) AS updated,'
@@ -503,7 +503,7 @@ def admin_create_account(body: AdminAccountCreate, request: Request):
     company = body.company.strip()
     password = secrets.token_urlsafe(12)
     account_id = str(uuid.uuid4())
-    with db() as s:
+    with db(SYSTEM) as s:
         if s.execute('SELECT id FROM accounts WHERE username=?', (name,)).fetchone():
             raise HTTPException(409, 'Ya existe una cuenta con ese usuario.')
         s.execute('INSERT INTO accounts (id,username,company,password,role,active,created) VALUES (?,?,?,?,?,?,?)',
@@ -516,7 +516,7 @@ def admin_create_account(body: AdminAccountCreate, request: Request):
 def admin_reset_password(account_id: str, request: Request):
     admin = require_admin(request)
     password = secrets.token_urlsafe(12)
-    with db() as s:
+    with db(SYSTEM) as s:
         target = s.execute('SELECT id,username FROM accounts WHERE id=?', (account_id,)).fetchone()
         if not target:
             raise HTTPException(404, 'Cuenta no encontrada.')
@@ -535,7 +535,7 @@ def admin_set_active(account_id: str, body: AdminSetActive, request: Request):
     admin = require_admin(request)
     if account_id == admin['id'] and not body.active:
         raise HTTPException(400, 'No podés desactivar tu propia cuenta de administrador.')
-    with db() as s:
+    with db(SYSTEM) as s:
         target = s.execute('SELECT id,username FROM accounts WHERE id=?', (account_id,)).fetchone()
         if not target:
             raise HTTPException(404, 'Cuenta no encontrada.')
@@ -563,7 +563,7 @@ def admin_carbon_status(account_id):
 @app.get('/api/admin/accounts/{account_id}/settings')
 def admin_get_settings(account_id: str, request: Request):
     require_admin(request)
-    with db() as s:
+    with db(SYSTEM) as s:
         admin_target(s, account_id)
         current = features.of(s, account_id)
     return {**features.catalogue(current), 'carbon': admin_carbon_status(account_id)}
@@ -577,7 +577,7 @@ class AdminSettings(BaseModel):
 @app.put('/api/admin/accounts/{account_id}/settings')
 def admin_put_settings(account_id: str, body: AdminSettings, request: Request):
     admin = require_admin(request)
-    with db() as s:
+    with db(SYSTEM) as s:
         target = admin_target(s, account_id)
         current = features.update(s, account_id, body.model_dump())
         changed = ', '.join(f'{k} {"activada" if on else "desactivada"}' for kind in ('sections', 'integrations') for k, on in getattr(body, kind).items())
@@ -595,7 +595,7 @@ def admin_set_company(account_id: str, body: AdminCompany, request: Request):
     company = body.company.strip()
     if not company:
         raise HTTPException(422, 'Ingresá el nombre de la empresa.')
-    with db() as s:
+    with db(SYSTEM) as s:
         target = admin_target(s, account_id)
         s.execute('UPDATE accounts SET company=? WHERE id=?', (company, account_id))
         event(s, admin['id'], f'Empresa de {target["username"]}: {company}')
@@ -604,7 +604,7 @@ def admin_set_company(account_id: str, body: AdminCompany, request: Request):
 
 def admin_carbon_target(request, account_id):
     admin = require_admin(request)
-    with db() as s:
+    with db(SYSTEM) as s:
         target = admin_target(s, account_id)
         features.require(s, account_id, 'integrations', 'INT-IVZC', 'Activá primero la integración con IVZ Carbon.')
     return admin, target
@@ -614,7 +614,7 @@ def admin_carbon_target(request, account_id):
 async def admin_connect_carbon(account_id: str, body: CarbonConnectBody, request: Request):
     admin, target = admin_carbon_target(request, account_id)
     await connect_carbon_account(account_id, body.token, ' por el administrador')
-    with db() as s:
+    with db(SYSTEM) as s:
         event(s, admin['id'], f'IVZ Carbon conectado para {target["username"]}')
     return admin_carbon_status(account_id)
 
@@ -629,10 +629,10 @@ async def admin_sync_carbon(account_id: str, request: Request):
 @app.delete('/api/admin/accounts/{account_id}/carbon')
 def admin_disconnect_carbon(account_id: str, request: Request):
     admin = require_admin(request)
-    with db() as s:
+    with db(SYSTEM) as s:
         target = admin_target(s, account_id)
     disconnect_carbon_account(account_id, ' por el administrador')
-    with db() as s:
+    with db(SYSTEM) as s:
         event(s, admin['id'], f'IVZ Carbon desconectado para {target["username"]}')
     return admin_carbon_status(account_id)
 
@@ -640,7 +640,7 @@ def admin_disconnect_carbon(account_id: str, request: Request):
 @app.post('/api/admin/accounts/{account_id}/impersonate')
 def admin_impersonate(account_id: str, request: Request, response: Response):
     admin = require_admin(request)
-    with db() as s:
+    with db(SYSTEM) as s:
         target = s.execute('SELECT id,username,active FROM accounts WHERE id=?', (account_id,)).fetchone()
         if not target or not target['active']:
             raise HTTPException(404, 'Cuenta no encontrada o inactiva.')
@@ -660,7 +660,7 @@ def admin_return(request: Request, response: Response):
     return_token = request.cookies.get('ivz_admin_return', '')
     if not return_token:
         raise HTTPException(400, 'No hay una sesión de administrador para volver.')
-    with db() as s:
+    with db(SYSTEM) as s:
         row = s.execute('SELECT a.id,a.role FROM accounts a JOIN sessions t ON t.account=a.id WHERE t.token=? AND t.expires>?',
                         (token_hash(return_token), time.time())).fetchone()
     if not row or row['role'] != 'admin':
