@@ -67,6 +67,8 @@ def initialize():
         _ensure_column(s, 'accounts', 'role', "role TEXT NOT NULL DEFAULT 'client'")
         _ensure_column(s, 'accounts', 'active', 'active BOOLEAN NOT NULL DEFAULT TRUE')
         _ensure_column(s, 'accounts', 'created', "created TEXT NOT NULL DEFAULT ''")
+        # Sections and integrations an administrator switched on or off for the account (backend/features.py).
+        _ensure_column(s, 'accounts', 'settings', "settings TEXT NOT NULL DEFAULT '{}'")
         _ensure_column(s, 'sessions', 'impersonated_by', 'impersonated_by TEXT')
 
 

@@ -25,6 +25,7 @@ Abrir http://127.0.0.1:8000. El usuario y la contraseña aleatoria de prueba est
 - Resumen ejecutivo Gemini opcional. Sin clave, se genera una plantilla marcada explícitamente «sin IA».
 - Historial de reportes por empresa, edición, aprobación por el mismo usuario y auditoría de operaciones del servidor.
 - PDF/impresión mediante el exportador original del navegador.
+- Configuración por cliente (`backend/features.py`): en Administración, «Configurar» enciende o apaga para cada cuenta las secciones del menú (salvo Inicio) y los conectores de Integraciones. Lo apagado desaparece del menú y del recorrido guiado y el servidor lo bloquea (reportes e integración con IVZ Carbon devuelven 403); los datos no se borran. Desde el mismo panel el administrador conecta IVZ Carbon con el token del cliente, sincroniza si ya hay sitios mapeados y desconecta (`/api/admin/accounts/{id}/settings`, `/api/admin/accounts/{id}/carbon`).
 
 ## IA
 

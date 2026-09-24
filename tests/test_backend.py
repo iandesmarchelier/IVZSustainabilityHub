@@ -166,6 +166,45 @@ class DemoTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertFalse(self.client.get('/api/integrations/carbon').json()['connected'])
 
+    def test_admin_switches_sections_and_integrations_per_account(self):
+        with db() as s:
+            s.execute("UPDATE accounts SET role='admin' WHERE id='two'")
+        self.login(); self.assertEqual(self.save().status_code, 200)
+        info = self.client.get('/api/state/catalogue').json()['features']
+        self.assertTrue(all(info['sections'].values()) and all(info['integrations'].values()))
+        self.assertEqual(self.client.put('/api/admin/accounts/one/settings', headers=self.headers, json={'sections': {'mapa': False}}).status_code, 403)
+        self.login('two')
+        for bad in ({'sections': {'inicio': False}}, {'integrations': {'INT-NOPE': True}}, {'sections': {'mapa': 'si'}}):
+            self.assertEqual(self.client.put('/api/admin/accounts/one/settings', headers=self.headers, json=bad).status_code, 422)
+        r = self.client.put('/api/admin/accounts/one/settings', headers=self.headers,
+                            json={'sections': {'mapa': False, 'reportes': False}, 'integrations': {'INT-IVZC': False}})
+        self.assertEqual(r.status_code, 200, r.text)
+        cfg = self.client.get('/api/admin/accounts/one/settings').json()
+        self.assertEqual({x['key'] for x in cfg['sections'] if not x['on']}, {'mapa', 'reportes'})
+        self.assertEqual(cfg['carbon'], {'connected': False})
+        self.assertEqual(self.client.post('/api/admin/accounts/one/carbon', headers=self.headers, json={'token': 'ivzc_x'}).status_code, 403)
+        # The client sees the change and the server enforces it.
+        self.login()
+        info = self.client.get('/api/me').json()['features']
+        self.assertEqual((info['sections']['mapa'], info['sections']['desempeno'], info['integrations']['INT-IVZC']), (False, True, False))
+        self.assertEqual(self.client.get('/api/reports').status_code, 403)
+        self.assertEqual(self.client.get('/api/integrations/carbon').status_code, 403)
+        # Back on, the administrator connects IVZ Carbon for the client and disconnects it.
+        self.login('two')
+        self.client.put('/api/admin/accounts/one/settings', headers=self.headers, json={'integrations': {'INT-IVZC': True}})
+
+        async def fake_carbon_get(path, token, params=None):
+            return {'/api/link/sites': [{'id': 'S1', 'name': 'Planta', 'country': 'Argentina', 'cc': 'AR'}]}[path]
+        with patch('backend.carbon_link.carbon_get', fake_carbon_get):
+            r = self.client.post('/api/admin/accounts/one/carbon', headers=self.headers, json={'token': 'ivzc_test'})
+        self.assertEqual(r.json(), {'connected': True, 'mapped': 0, 'lastSync': None, 'lastCount': None})
+        self.assertEqual(self.client.post('/api/admin/accounts/one/carbon/sync', headers=self.headers).status_code, 422)  # nothing mapped yet
+        self.login()
+        with patch('backend.carbon_link.carbon_get', fake_carbon_get):
+            self.assertTrue(self.client.get('/api/integrations/carbon').json()['connected'])
+        self.login('two')
+        self.assertEqual(self.client.delete('/api/admin/accounts/one/carbon', headers=self.headers).json(), {'connected': False})
+
     def diff(self, before, after):
         """What the screen sends: the rest of the state if changed, changed/removed rows, the order only if it moved."""
         body = {'revision': before['revision'], 'changes': {}, 'order': {}}

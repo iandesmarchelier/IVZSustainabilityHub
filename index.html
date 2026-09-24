@@ -1141,12 +1141,19 @@ const ROUTES = [
   { id: "auditoria", name: "Auditoría", icon: "history", group: "Entregables", crumb: ["Entregables", "Registro de Cambios"] }
 ];
 
+/* Secciones e integraciones que el administrador habilitó para esta cuenta (backend/features.py).
+   bridge.js las toma de la sesión antes del primer render; Inicio siempre está. */
+let FEATURES = { sections: {}, integrations: {} };
+const secOn = id => id === "inicio" || FEATURES.sections[id] !== false;
+const intOn = id => FEATURES.integrations[id] !== false;
+
 function renderNav() {
+  if (!secOn(ui.route)) ui.route = "inicio";
   const groups = [];
-  ROUTES.forEach(r => { if (!groups.includes(r.group)) groups.push(r.group); });
+  ROUTES.forEach(r => { if (secOn(r.id) && !groups.includes(r.group)) groups.push(r.group); });
   $("#nav").innerHTML = groups.map(g =>
     '<div class="nav-sec">' + g + "</div>" +
-    ROUTES.filter(r => r.group === g).map(r =>
+    ROUTES.filter(r => r.group === g && secOn(r.id)).map(r =>
       '<button class="nav-item' + (ui.route === r.id ? " on" : "") + '" data-route="' + r.id + '"><i data-lucide="' + r.icon + '"></i>' + r.name + "</button>"
     ).join("")
   ).join("");
@@ -1157,6 +1164,7 @@ function renderNav() {
 }
 
 function go(route, opts) {
+  if (!secOn(route)) { toast("Esta sección no está habilitada para tu cuenta.", "warn"); return; }
   ui.route = route;
   if (opts && opts.tab) ui.tab[route] = opts.tab;
   destroyCharts();
@@ -1254,6 +1262,7 @@ function dynDims() {
 }
 
 function render() {
+  if (!secOn(ui.route)) { ui.route = "inicio"; renderNav(); renderShell(); }
   const el = $("#view");
   el.innerHTML = '<div class="sk" style="height:120px;margin-bottom:14px"></div><div class="sk" style="height:260px"></div>';
   // pequeño skeleton para que el cambio de pantalla no sea un salto seco
@@ -1339,6 +1348,8 @@ function viewInicio(el) {
   bindKpis(el);
   $("#go-report").onclick = () => go("reportes");
   $("#go-amb").onclick = () => go("ambiciones");
+  if (!secOn("reportes")) $("#go-report").style.display = "none";
+  if (!secOn("ambiciones")) $("#go-amb").style.display = "none";
 
   // A. Evolución ESG (índice) — reacciona a filtros y al selector de métrica
   const drawEvo = () => {
@@ -2308,7 +2319,8 @@ function openDimensionModal() {
 function viewIntegraciones(el) {
   el.innerHTML =
     '<h1 class="page-title">Integraciones</h1><p class="page-sub">Fuentes conectadas que alimentan el modelo ESG de forma automática.</p>' +
-    '<div class="grid g3">' + appState.integrations.map(i => {
+    (appState.integrations.some(i => intOn(i.id)) ? "" : '<div class="card"><div class="card-b muted">No hay integraciones habilitadas para esta cuenta. Pedíselas a tu administrador.</div></div>') +
+    '<div class="grid g3">' + appState.integrations.filter(i => intOn(i.id)).map(i => {
       const cls = i.status === "Connected" || i.status === "Active" ? "ok" : i.status === "Available" ? "" : "warn";
       return '<div class="card" data-int="' + i.id + '" style="cursor:pointer">' +
         '<div class="card-h"><div class="k-ico" style="width:30px;height:30px"><i data-lucide="' + i.icon + '"></i></div><h3>' + esc(i.name) + "</h3>" +
@@ -3327,27 +3339,30 @@ const TOUR = [
   { route: "reportes", title: "Reportes", text: "Genera borradores de reportes ESG utilizando IA, con estructura profesional, gráficos del dashboard y edición sección por sección." }
 ];
 
+/* los pasos de secciones que el administrador ocultó para la cuenta no se muestran */
+const tourSteps = () => TOUR.filter(s => secOn(s.route) && (s.route !== "integraciones" || intOn("INT-IVZC")));
 function startTour() {
   ui.tour = 0; drawTour();
 }
 function drawTour() {
-  const s = TOUR[ui.tour];
+  const steps = tourSteps();
+  const s = steps[ui.tour];
   if (s.action) s.action();
   if (ui.route !== s.route) go(s.route);
   const old = $("#tour-mask"); if (old) old.remove();
   const d = document.createElement("div");
   d.id = "tour-mask";
-  d.innerHTML = '<div class="tour-card"><div class="t-h"><div class="flexrow"><span class="badge accent">Paso ' + (ui.tour + 1) + " de " + TOUR.length + '</span>' +
+  d.innerHTML = '<div class="tour-card"><div class="t-h"><div class="flexrow"><span class="badge accent">Paso ' + (ui.tour + 1) + " de " + steps.length + '</span>' +
     '<button class="icon-btn right" id="t-exit"><i data-lucide="x"></i></button></div>' +
     '<h3 style="margin:10px 0 0;font-size:17px">' + esc(s.title) + "</h3></div>" +
     '<div class="t-b"><p style="margin:0;color:var(--ink-2);font-size:13.5px;line-height:1.65">' + esc(s.text) + "</p></div>" +
-    '<div class="t-f"><div class="tour-dots">' + TOUR.map((x, i) => '<i class="' + (i === ui.tour ? "on" : "") + '"></i>').join("") + "</div>" +
+    '<div class="t-f"><div class="tour-dots">' + steps.map((x, i) => '<i class="' + (i === ui.tour ? "on" : "") + '"></i>').join("") + "</div>" +
     '<button class="btn" id="t-prev" ' + (ui.tour === 0 ? "disabled" : "") + ">Anterior</button>" +
-    '<button class="btn pri" id="t-next">' + (ui.tour === TOUR.length - 1 ? "Finalizar" : "Siguiente") + "</button></div></div>";
+    '<button class="btn pri" id="t-next">' + (ui.tour === steps.length - 1 ? "Finalizar" : "Siguiente") + "</button></div></div>";
   document.body.appendChild(d);
   $("#t-exit").onclick = endTour;
   $("#t-prev").onclick = () => { if (ui.tour > 0) { ui.tour--; drawTour(); } };
-  $("#t-next").onclick = () => { if (ui.tour < TOUR.length - 1) { ui.tour++; drawTour(); } else endTour(true); };
+  $("#t-next").onclick = () => { if (ui.tour < steps.length - 1) { ui.tour++; drawTour(); } else endTour(true); };
   icons();
 }
 function endTour(done) {

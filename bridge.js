@@ -235,6 +235,7 @@ async function boot() {
   if (data.state) await loadClosures();
   if (data.role === 'admin' && !data.impersonating) { location.replace('/admin'); return; }
   aiAvailable = data.ai;
+  if (data.features) FEATURES = data.features;  // secciones e integraciones habilitadas por el administrador
   CONFIG.USER.name = data.username;
   CONFIG.USER.role = data.company;
   filters.loc = 'ALL';

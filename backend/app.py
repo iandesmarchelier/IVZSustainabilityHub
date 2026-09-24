@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from .storage import db, initialize
 from .security import hash_password, verify_password, token_hash
 from .reports import make_report, regenerate_section, selected_sections
-from . import carbon_link, inventory
+from . import carbon_link, features, inventory
 from typing import Literal
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -125,12 +125,35 @@ def logout(request: Request, response: Response):
 def me(request: Request):
     user = account(request)
     return {'id': user['id'], 'username': user['username'], 'company': user['company'],
-            'role': user['role'], 'impersonating': bool(user.get('impersonated_by'))}
+            'role': user['role'], 'impersonating': bool(user.get('impersonated_by')), 'features': switches_of(user)}
+
+
+def switches_of(user):
+    with db() as s:
+        return features.of(s, user['id'])
 
 
 def session_info(user):
     return {'company': user['company'], 'username': user['username'], 'ai': bool(os.getenv('GEMINI_API_KEY')),
-            'role': user['role'], 'impersonating': bool(user.get('impersonated_by'))}
+            'role': user['role'], 'impersonating': bool(user.get('impersonated_by')), 'features': switches_of(user)}
+
+
+def section_user(request, section):
+    """The signed-in account, provided the administrator left this section visible for it."""
+    user = account(request)
+    with db() as s:
+        features.require(s, user['id'], 'sections', section, 'Esta sección no está habilitada para tu cuenta.')
+    return user
+
+
+CARBON_OFF = 'La integración con IVZ Carbon está desactivada para esta cuenta.'
+
+
+def carbon_user(request):
+    user = account(request)
+    with db() as s:
+        features.require(s, user['id'], 'integrations', 'INT-IVZC', CARBON_OFF)
+    return user
 
 
 @app.get('/api/state')
@@ -202,7 +225,7 @@ class ReportBody(BaseModel):
 
 @app.post('/api/reports')
 async def generate_report(body: ReportBody, request: Request):
-    user = account(request)
+    user = section_user(request, 'reportes')
     row = inventory.load(user['id'])
     if not row['state']:
         raise HTTPException(422, 'Primero guardá datos')
@@ -230,7 +253,7 @@ async def generate_report(body: ReportBody, request: Request):
 
 @app.get('/api/reports')
 def list_reports(request: Request):
-    user = account(request)
+    user = section_user(request, 'reportes')
     with db() as s:
         rows = s.execute('SELECT body FROM reports WHERE account=? ORDER BY created DESC', (user['id'],)).fetchall()
     return [json.loads(r['body']) for r in rows]
@@ -238,7 +261,7 @@ def list_reports(request: Request):
 
 @app.put('/api/reports/{report_id}')
 def approve_report(report_id: str, body: dict, request: Request):
-    user = account(request)
+    user = section_user(request, 'reportes')
     with db() as s:
         row = s.execute('SELECT body FROM reports WHERE id=? AND account=?', (report_id, user['id'])).fetchone()
         if not row:
@@ -280,7 +303,7 @@ def approve_report(report_id: str, body: dict, request: Request):
 
 @app.post('/api/reports/{report_id}/sections/{section_id}/regenerate')
 async def regenerate(report_id: str, section_id: str, request: Request):
-    user = account(request)
+    user = section_user(request, 'reportes')
     with db() as s:
         row = s.execute('SELECT body FROM reports WHERE id=? AND account=?', (report_id, user['id'])).fetchone()
     if not row:
@@ -320,24 +343,30 @@ class CarbonConnectBody(BaseModel):
     token: str = Field(min_length=1, max_length=300)
 
 
-@app.post('/api/integrations/carbon/connect')
-async def connect_carbon(body: CarbonConnectBody, request: Request):
-    user = account(request)
+async def connect_carbon_account(account_id, token, by=''):
+    """Validate the token against IVZ Carbon and store it; the site mapping starts empty."""
     try:
-        sites = await carbon_link.fetch_sites(body.token)
+        sites = await carbon_link.fetch_sites(token)
     except httpx.HTTPError as exc:
         raise HTTPException(422, 'No se pudo validar el token de IVZ Carbon.') from exc
     with db() as s:
         s.execute('INSERT INTO carbon_links VALUES (?, ?, \'{}\', NULL, NULL) '
                   'ON CONFLICT(account) DO UPDATE SET token=?, site_map=\'{}\', last_sync=NULL, last_count=NULL',
-                  (user['id'], body.token, body.token))
-        event(s, user['id'], 'Integración IVZ Carbon conectada')
+                  (account_id, token, token))
+        event(s, account_id, 'Integración IVZ Carbon conectada' + by)
+    return sites
+
+
+@app.post('/api/integrations/carbon/connect')
+async def connect_carbon(body: CarbonConnectBody, request: Request):
+    user = carbon_user(request)
+    sites = await connect_carbon_account(user['id'], body.token)
     return {'connected': True, 'sites': sites, 'siteMap': {}}
 
 
 @app.get('/api/integrations/carbon')
 async def get_carbon_link(request: Request):
-    user = account(request)
+    user = carbon_user(request)
     row = carbon_link_row(user['id'])
     if not row:
         return {'connected': False}
@@ -355,7 +384,7 @@ class CarbonMappingBody(BaseModel):
 
 @app.put('/api/integrations/carbon/mapping')
 def set_carbon_mapping(body: CarbonMappingBody, request: Request):
-    user = account(request)
+    user = carbon_user(request)
     if not carbon_link_row(user['id']):
         raise HTTPException(404, 'Conectá IVZ Carbon primero.')
     state = inventory.load_catalogue(user['id'])['state']
@@ -369,30 +398,33 @@ def set_carbon_mapping(body: CarbonMappingBody, request: Request):
 
 @app.post('/api/integrations/carbon/sync')
 async def sync_carbon(request: Request):
-    user = account(request)
-    link = carbon_link_row(user['id'])
+    return await sync_carbon_account(carbon_user(request)['id'])
+
+
+async def sync_carbon_account(account_id, by=''):
+    link = carbon_link_row(account_id)
     if not link:
         raise HTTPException(404, 'Conectá IVZ Carbon primero.')
     site_map = json.loads(link['site_map'])
     if not site_map:
         raise HTTPException(422, 'Mapeá al menos un sitio antes de sincronizar.')
     for attempt in range(5):
-        row = inventory.load(user['id'])
+        row = inventory.load(account_id)
         if not row['state']:
             raise HTTPException(422, 'Primero guardá datos en el Hub.')
         state = row['state']
         try:
-            closed = {c['year'] for c in inventory.closures(user['id'])}
+            closed = {c['year'] for c in inventory.closures(account_id)}
             count = await carbon_link.sync_measures(state, site_map, link['token'], closed)
         except httpx.HTTPError as exc:
             raise HTTPException(502, 'No se pudo sincronizar con IVZ Carbon. Revisá el token o intentá más tarde.') from exc
         updated = datetime.now(timezone.utc).isoformat()
 
         def saved(s, _):
-            s.execute('UPDATE carbon_links SET last_sync=?, last_count=? WHERE account=?', (updated, count, user['id']))
-            event(s, user['id'], f'IVZ Carbon sincronizado: {count} registros')
+            s.execute('UPDATE carbon_links SET last_sync=?, last_count=? WHERE account=?', (updated, count, account_id))
+            event(s, account_id, f'IVZ Carbon sincronizado: {count} registros{by}')
         try:
-            inventory.save(user['id'], row['revision'], full=state, on_saved=saved)
+            inventory.save(account_id, row['revision'], full=state, on_saved=saved)
         except HTTPException as exc:
             if exc.status_code == 409:
                 continue
@@ -435,12 +467,15 @@ def reopen_year(year: int, body: ReopenYear, request: Request):
                                  lambda s: event(s, user['id'], f'Año {year} reabierto por {acting_as(user)}. Motivo: {body.reason.strip()}'))
 
 
+def disconnect_carbon_account(account_id, by=''):
+    with db() as s:
+        s.execute('DELETE FROM carbon_links WHERE account=?', (account_id,))
+        event(s, account_id, 'Integración IVZ Carbon desconectada' + by)
+
+
 @app.delete('/api/integrations/carbon')
 def disconnect_carbon(request: Request):
-    user = account(request)
-    with db() as s:
-        s.execute('DELETE FROM carbon_links WHERE account=?', (user['id'],))
-        event(s, user['id'], 'Integración IVZ Carbon desconectada')
+    disconnect_carbon_account(carbon_user(request)['id'])
     return {'ok': True}
 
 
@@ -507,6 +542,80 @@ def admin_set_active(account_id: str, body: AdminSetActive, request: Request):
             s.execute('DELETE FROM sessions WHERE account=?', (account_id,))
         event(s, admin['id'], ('Cuenta desactivada: ' if not body.active else 'Cuenta reactivada: ') + target['username'])
     return {'ok': True}
+
+
+def admin_target(s, account_id):
+    target = s.execute('SELECT id,username,role FROM accounts WHERE id=?', (account_id,)).fetchone()
+    if not target:
+        raise HTTPException(404, 'Cuenta no encontrada.')
+    return target
+
+
+def admin_carbon_status(account_id):
+    link = carbon_link_row(account_id)
+    if not link:
+        return {'connected': False}
+    return {'connected': True, 'mapped': len(json.loads(link['site_map'])), 'lastSync': link['last_sync'], 'lastCount': link['last_count']}
+
+
+@app.get('/api/admin/accounts/{account_id}/settings')
+def admin_get_settings(account_id: str, request: Request):
+    require_admin(request)
+    with db() as s:
+        admin_target(s, account_id)
+        current = features.of(s, account_id)
+    return {**features.catalogue(current), 'carbon': admin_carbon_status(account_id)}
+
+
+class AdminSettings(BaseModel):
+    sections: dict[str, bool] = {}
+    integrations: dict[str, bool] = {}
+
+
+@app.put('/api/admin/accounts/{account_id}/settings')
+def admin_put_settings(account_id: str, body: AdminSettings, request: Request):
+    admin = require_admin(request)
+    with db() as s:
+        target = admin_target(s, account_id)
+        current = features.update(s, account_id, body.model_dump())
+        changed = ', '.join(f'{k} {"activada" if on else "desactivada"}' for kind in ('sections', 'integrations') for k, on in getattr(body, kind).items())
+        event(s, admin['id'], f'Configuración de {target["username"]}: {changed}')
+    return features.catalogue(current)
+
+
+def admin_carbon_target(request, account_id):
+    admin = require_admin(request)
+    with db() as s:
+        target = admin_target(s, account_id)
+        features.require(s, account_id, 'integrations', 'INT-IVZC', 'Activá primero la integración con IVZ Carbon.')
+    return admin, target
+
+
+@app.post('/api/admin/accounts/{account_id}/carbon')
+async def admin_connect_carbon(account_id: str, body: CarbonConnectBody, request: Request):
+    admin, target = admin_carbon_target(request, account_id)
+    await connect_carbon_account(account_id, body.token, ' por el administrador')
+    with db() as s:
+        event(s, admin['id'], f'IVZ Carbon conectado para {target["username"]}')
+    return admin_carbon_status(account_id)
+
+
+@app.post('/api/admin/accounts/{account_id}/carbon/sync')
+async def admin_sync_carbon(account_id: str, request: Request):
+    admin_carbon_target(request, account_id)
+    await sync_carbon_account(account_id, ' por el administrador')
+    return admin_carbon_status(account_id)
+
+
+@app.delete('/api/admin/accounts/{account_id}/carbon')
+def admin_disconnect_carbon(account_id: str, request: Request):
+    admin = require_admin(request)
+    with db() as s:
+        target = admin_target(s, account_id)
+    disconnect_carbon_account(account_id, ' por el administrador')
+    with db() as s:
+        event(s, admin['id'], f'IVZ Carbon desconectado para {target["username"]}')
+    return admin_carbon_status(account_id)
 
 
 @app.post('/api/admin/accounts/{account_id}/impersonate')
