@@ -54,6 +54,7 @@ def initialize():
             'CREATE TABLE IF NOT EXISTS states (account TEXT PRIMARY KEY, revision INTEGER NOT NULL, body TEXT NOT NULL)',
             'CREATE TABLE IF NOT EXISTS reports (id TEXT PRIMARY KEY, account TEXT NOT NULL, body TEXT NOT NULL, created TEXT NOT NULL)',
             'CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, account TEXT NOT NULL, action TEXT NOT NULL, created TEXT NOT NULL)',
+            'CREATE INDEX IF NOT EXISTS events_account ON events(account,created)',
             'CREATE TABLE IF NOT EXISTS login_limits (username TEXT PRIMARY KEY, attempts INTEGER NOT NULL, reset_at DOUBLE PRECISION NOT NULL)',
             'CREATE TABLE IF NOT EXISTS carbon_links (account TEXT PRIMARY KEY, token TEXT NOT NULL, site_map TEXT NOT NULL DEFAULT \'{}\', last_sync TEXT, last_count INTEGER)',
             # Measures and actuals as rows (see inventory.py); the rest of the state stays in states.body.

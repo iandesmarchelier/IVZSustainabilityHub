@@ -483,9 +483,11 @@ def disconnect_carbon(request: Request):
 def admin_list_accounts(request: Request):
     require_admin(request)
     with db() as s:
-        rows = s.execute('SELECT a.id,a.username,a.company,a.role,a.active,a.created,st.revision,'
+        # Última actividad: the latest event of the account (saves, reports, syncs, year closings).
+        rows = s.execute('SELECT a.id,a.username,a.company,a.role,a.active,a.created,'
+                         '(SELECT MAX(e.created) FROM events e WHERE e.account=a.id) AS updated,'
                          '(SELECT COUNT(*) FROM state_rows r WHERE r.account=a.id) AS records FROM accounts a '
-                         'LEFT JOIN states st ON st.account=a.id ORDER BY a.created DESC, a.username').fetchall()
+                         'ORDER BY a.created DESC, a.username').fetchall()
     return [dict(r) for r in rows]
 
 
