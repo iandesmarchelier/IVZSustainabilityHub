@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
-from .storage import SYSTEM, db, initialize, isolated
+from .storage import SYSTEM, db, hosted, initialize, isolated
 from .security import hash_password, verify_password, token_hash
 from .reports import make_report, regenerate_section, selected_sections
 from . import carbon_link, features, inventory
@@ -108,7 +108,7 @@ def login(body: Login, response: Response):
         s.execute('DELETE FROM sessions WHERE expires<?', (time.time(),))
         s.execute('INSERT INTO sessions (token,account,expires) VALUES (?, ?, ?)', (token_hash(token), user['id'], time.time()+28800))
         s.execute('DELETE FROM login_limits WHERE username=?', (username,))
-    response.set_cookie('ivz_session', token, httponly=True, secure=bool(os.getenv('VERCEL')) or os.getenv('COOKIE_SECURE') == '1',
+    response.set_cookie('ivz_session', token, httponly=True, secure=hosted() or os.getenv('COOKIE_SECURE') == '1',
                         samesite='strict', max_age=28800, path='/')
     return {'company': user['company']}
 
@@ -648,7 +648,7 @@ def admin_impersonate(account_id: str, request: Request, response: Response):
         s.execute('INSERT INTO sessions (token,account,expires,impersonated_by) VALUES (?,?,?,?)',
                   (token_hash(token), account_id, time.time()+28800, admin['id']))
         event(s, admin['id'], f'Entró como: {target["username"]}')
-    secure = bool(os.getenv('VERCEL')) or os.getenv('COOKIE_SECURE') == '1'
+    secure = hosted() or os.getenv('COOKIE_SECURE') == '1'
     response.set_cookie('ivz_admin_return', request.cookies.get('ivz_session', ''),
                         httponly=True, samesite='strict', secure=secure, max_age=28800, path='/')
     response.set_cookie('ivz_session', token, httponly=True, samesite='strict', secure=secure, max_age=28800, path='/')
@@ -666,7 +666,7 @@ def admin_return(request: Request, response: Response):
     if not row or row['role'] != 'admin':
         response.delete_cookie('ivz_admin_return', path='/')
         raise HTTPException(401, 'La sesión de administrador venció. Volvé a ingresar.')
-    secure = bool(os.getenv('VERCEL')) or os.getenv('COOKIE_SECURE') == '1'
+    secure = hosted() or os.getenv('COOKIE_SECURE') == '1'
     response.set_cookie('ivz_session', return_token, httponly=True, samesite='strict', secure=secure, max_age=28800, path='/')
     response.delete_cookie('ivz_admin_return', path='/')
     return {'ok': True}

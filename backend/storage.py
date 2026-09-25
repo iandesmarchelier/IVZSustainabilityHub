@@ -20,6 +20,11 @@ TENANT_ROLE = 'ivz_hub_tenant'
 _tenant_role = {'ready': None}
 
 
+def hosted():
+    """Vercel, or a container started with HUB_ENV=production: PostgreSQL and secure cookies are mandatory."""
+    return bool(os.getenv('VERCEL')) or os.getenv('HUB_ENV') == 'production'
+
+
 @contextmanager
 def db(account):
     if account is not SYSTEM and not (isinstance(account, str) and account):
@@ -30,8 +35,8 @@ def db(account):
         from psycopg.rows import dict_row
         conn = psycopg.connect(url, row_factory=dict_row)
     else:
-        if os.getenv('VERCEL'):
-            raise RuntimeError('DATABASE_URL is required on Vercel')
+        if hosted():
+            raise RuntimeError('DATABASE_URL is required on Vercel and with HUB_ENV=production')
         path = Path(os.getenv('SQLITE_PATH', 'data/ivz.sqlite3'))
         path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(path, timeout=20)

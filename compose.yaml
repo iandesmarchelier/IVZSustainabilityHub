@@ -1,0 +1,30 @@
+# Prueba local del contenedor con su propio PostgreSQL: docker compose up --build
+# Requiere HUB_DB_PASSWORD en un archivo .env junto a este.
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: hub
+      POSTGRES_DB: hub
+      POSTGRES_PASSWORD: ${HUB_DB_PASSWORD:?Definí HUB_DB_PASSWORD en .env}
+    volumes:
+      - hub_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hub -d hub"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+  app:
+    build: .
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      DATABASE_URL: postgresql://hub:${HUB_DB_PASSWORD}@db:5432/hub
+      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      CARBON_API_BASE: ${CARBON_API_BASE:-https://ivzcarbon.vercel.app}
+    depends_on:
+      db:
+        condition: service_healthy
+volumes:
+  hub_pg:
