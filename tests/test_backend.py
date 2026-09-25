@@ -503,9 +503,13 @@ class DemoTests(unittest.TestCase):
         import re
         root = Path(__file__).resolve().parent.parent
         served = set(re.findall(r"FileResponse\(ROOT / '([^']+)'", (root / 'backend/app.py').read_text(encoding='utf8')))
-        copied = {name for line in (root / 'Dockerfile').read_text(encoding='utf8').splitlines() if line.startswith('COPY ')
-                  for name in line.split()[1:-1]}
-        self.assertEqual(served - copied, set())
+        dockerfile = root / 'Dockerfile'
+        if dockerfile.exists():  # in the repository: the image copies each of them
+            copied = {name for line in dockerfile.read_text(encoding='utf8').splitlines() if line.startswith('COPY ')
+                      for name in line.split()[1:-1]}
+            self.assertEqual(served - copied, set())
+        else:  # inside the image, where the CI runs the tests: they are there
+            self.assertEqual({name for name in served if not (root / name).exists()}, set())
 
     def test_every_connection_names_its_account(self):
         with self.assertRaises(TypeError), db():
