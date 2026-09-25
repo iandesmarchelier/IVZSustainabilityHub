@@ -2,7 +2,13 @@ const fs = require('fs');
 const vm = require('vm');
 const html = fs.readFileSync('index.html', 'utf8');
 const scripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)].map(x=>x[1]).filter(x=>x.includes('buildInitialState'));
-const context = vm.createContext({console, window: {}, document: {addEventListener() {}}, setTimeout() {}});
+// The page touches the DOM while it loads (e.g. the boot logo): any element, property or call is a harmless stand-in.
+const element = new Proxy(function () {}, {
+  get: (target, key) => key === Symbol.toPrimitive ? () => '' : element,
+  set: () => true,
+  apply: () => element,
+});
+const context = vm.createContext({console, window: {}, document: element, setTimeout() {}});
 vm.runInContext(scripts[0], context);
 fs.mkdirSync('data', {recursive:true});
 vm.runInContext('const testSeed = buildInitialState()', context);
