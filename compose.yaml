@@ -1,5 +1,7 @@
 # Prueba local del contenedor con su propio PostgreSQL: docker compose up --build
 # Requiere HUB_DB_PASSWORD en un archivo .env junto a este.
+# La integración apunta al IVZ Carbon local (compose de IVZCarbon, puerto 8001), no al publicado.
+name: ivz-sustainability-hub
 services:
   db:
     image: postgres:17
@@ -20,9 +22,12 @@ services:
       - "127.0.0.1:8000:8000"
     environment:
       DATABASE_URL: postgresql://hub:${HUB_DB_PASSWORD}@db:5432/hub
+      HUB_ENV: ${HUB_ENV:-local}
       ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      CARBON_API_BASE: ${CARBON_API_BASE:-https://ivzcarbon.vercel.app}
+      CARBON_API_BASE: ${CARBON_API_BASE:-http://host.docker.internal:8001}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       db:
         condition: service_healthy
