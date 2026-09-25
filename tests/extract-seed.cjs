@@ -14,4 +14,8 @@ fs.mkdirSync('data', {recursive:true});
 vm.runInContext('const testSeed = buildInitialState()', context);
 fs.writeFileSync('data/seed.json', vm.runInContext('JSON.stringify(testSeed)', context));
 fs.writeFileSync('data/expected.json', vm.runInContext('JSON.stringify(METRICS.map(m => ({id:m.id,value:computeMetric(testSeed,m.id,{year:2026,loc:"GRP",s2:"Market-based"})})))', context));
+// A new account's blank state, as bridge.js builds it (tests/test_onboarding.py).
+const emptyState = fs.readFileSync('bridge.js', 'utf8').match(/function buildEmptyState\(\) \{[\s\S]*?\r?\n\}\r?\n/)[0];
+vm.runInContext(emptyState, context);
+fs.writeFileSync('data/empty-state.json', vm.runInContext('JSON.stringify(buildEmptyState())', context));
 console.log('Extracted frontend seed.');
