@@ -396,14 +396,6 @@ def change_user(user_id: str, body: UserChange, request: Request):
     return changed
 
 
-@app.post('/api/users/{user_id}/reset-password')
-def reset_user_password(user_id: str, request: Request):
-    user = company_admin(request)
-    with db(user['id']) as s:
-        username, password = users.reset_password(s, user['id'], user_id)
-        event(s, user['id'], f'Contraseña reseteada: {username}', acting_as(user))
-    return {'password': password}
-
 
 def carbon_link_row(account_id):
     with db(account_id) as s:

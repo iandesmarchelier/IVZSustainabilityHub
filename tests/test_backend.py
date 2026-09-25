@@ -441,7 +441,7 @@ class DemoTests(unittest.TestCase):
         self.assertEqual(self.client.put('/api/users/' + ana['id'], headers=self.headers, json={'role': 'editor'}).status_code, 403)  # now a viewer
         self.assertEqual(self.login_as('ana', ana['password']).status_code, 200)
         self.assertEqual(self.client.put('/api/users/' + ana['id'], headers=self.headers, json={'active': False}).status_code, 409)
-        # Switching a user off ends its sessions; a reset password replaces the old one.
+        # Switching a user off ends its sessions.
         other = self.client.post('/api/users', headers=self.headers, json={'username': 'luis', 'role': 'editor'}).json()
         luis = TestClient(app); luis.post('/api/login', headers=self.headers, json={'username': 'luis', 'password': other['password']})
         self.assertEqual(luis.get('/api/me').status_code, 200)
@@ -450,13 +450,15 @@ class DemoTests(unittest.TestCase):
         self.assertEqual(self.login_as('luis', other['password']).status_code, 403)
         self.login_as('ana', ana['password'])
         self.client.put('/api/users/' + other['id'], headers=self.headers, json={'active': True})
-        fresh = self.client.post('/api/users/' + other['id'] + '/reset-password', headers=self.headers).json()['password']
-        self.assertEqual(self.login_as('luis', other['password']).status_code, 401)
-        self.assertEqual(self.login_as('luis', fresh).status_code, 200)
+        self.assertEqual(self.login_as('luis', other['password']).status_code, 200)
+        # Only Invenzis gives new passwords, never a company's admin.
+        self.login_as('ana', ana['password'])
+        self.assertEqual(self.client.post('/api/users/' + other['id'] + '/reset-password', headers=self.headers).status_code, 404)
+        self.assertEqual(self.client.post('/api/admin/accounts/one/users/' + other['id'] + '/reset-password', headers=self.headers).status_code, 403)
+        self.assertEqual(self.login_as('luis', other['password']).status_code, 200)
         # A company never reaches the users of another one.
         self.login('two')
         self.assertEqual(self.client.put('/api/users/' + other['id'], headers=self.headers, json={'active': False}).status_code, 404)
-        self.assertEqual(self.client.post('/api/users/one/reset-password', headers=self.headers).status_code, 404)
         self.assertEqual([u['username'] for u in self.client.get('/api/users').json()], ['two'])
 
     def test_invenzis_admin_manages_the_users_of_a_client(self):
@@ -480,6 +482,7 @@ class DemoTests(unittest.TestCase):
         me = self.client.get('/api/me').json()
         self.assertEqual((me['username'], me['access'], me['impersonating']), ('Administrador de Invenzis', 'admin', True))
         self.assertEqual(len(self.client.get('/api/users').json()), 2)
+        self.assertEqual(self.login_as('ana', ana['password']).status_code, 401)
         self.assertEqual(self.login_as('ana', fresh).status_code, 200)
         self.assertEqual(self.client.get('/api/admin/accounts').status_code, 403)
 
