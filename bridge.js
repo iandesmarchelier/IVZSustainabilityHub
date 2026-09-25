@@ -205,12 +205,13 @@ function showLogin(message = '') {
   screen.id = 'login-screen';
   screen.style.cssText = 'position:fixed;inset:0;background:var(--bg);color:var(--ink);font:16px system-ui;z-index:99999;display:grid;place-items:center';
   screen.innerHTML = '<main style="background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:44px;width:min(440px,94vw);box-shadow:var(--sh-lg)">' +
-    '<h1 style="margin:0 0 8px;font-size:26px">IVZ Sustainability Hub</h1><p style="color:var(--ink-2);line-height:1.5;margin:0">Sistema Tenant Invenzis</p>' +
+    '<div style="display:flex;align-items:center;gap:14px;margin:0 0 8px"><img id="login-logo" alt="" style="height:52px;width:auto;flex:none"><h1 style="margin:0;font-size:26px">IVZ Sustainability Hub</h1></div><p style="color:var(--ink-2);line-height:1.5;margin:0">Sistema Tenant Invenzis</p>' +
     '<form><label style="display:block;margin-top:20px">Usuario<input name="username" autocomplete="username" required style="font:inherit;width:100%;padding:12px;border-radius:8px;border:1px solid var(--line-2);margin-top:8px"></label>' +
     '<label style="display:block;margin-top:20px">Contraseña<input type="password" name="password" autocomplete="current-password" required style="font:inherit;width:100%;padding:12px;border-radius:8px;border:1px solid var(--line-2);margin-top:8px"></label>' +
     '<p id="login-error" role="alert" style="color:var(--bad);min-height:24px;margin:8px 0 0"></p>' +
     '<button type="submit" style="font:inherit;width:100%;padding:12px;border-radius:8px;border:0;background:var(--accent);color:white;cursor:pointer;margin-top:8px">Ingresar</button></form></main>';
   document.body.appendChild(screen);
+  screen.querySelector('#login-logo').src = CONFIG.LOGO;
   screen.querySelector('#login-error').textContent = message;
   screen.querySelector('form').onsubmit = async event => {
     event.preventDefault(); const form = event.target; const button = form.querySelector('button'); button.disabled = true;
