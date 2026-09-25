@@ -83,7 +83,7 @@ class PostgresTests(base.DemoTests):
             for table in self.account_tables():
                 self.assertEqual(s.execute(f"DELETE FROM {table} WHERE account='two'").rowcount, 0, table)
             self.assertEqual(s.execute("UPDATE accounts SET company='x' WHERE id='two'").rowcount, 0)
-        for sql in ("INSERT INTO events VALUES ('intruso', 'two', 'x', 'x')",  # a row for another account
+        for sql in ("INSERT INTO events (id,account,action,created) VALUES ('intruso', 'two', 'x', 'x')",  # a row for another account
                     "UPDATE reports SET account='two'"):                    # moving its own rows to another
             with self.subTest(sql=sql), self.assertRaises(psycopg.errors.InsufficientPrivilege), db('one') as s:
                 s.execute(sql)

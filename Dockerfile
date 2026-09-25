@@ -11,7 +11,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY backend ./backend
-COPY index.html admin.html bridge.js reports-ui.js carbon-integration-ui.js globe.js map-ui.js world.js ./
+COPY index.html admin.html bridge.js reports-ui.js carbon-integration-ui.js users-ui.js globe.js map-ui.js world.js ./
 
 RUN useradd --create-home hub
 USER hub

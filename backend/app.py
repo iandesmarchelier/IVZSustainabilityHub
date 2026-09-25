@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from .storage import SYSTEM, db, hosted, initialize, isolated
 from .security import hash_password, verify_password, token_hash
 from .reports import make_report, regenerate_section, selected_sections
-from . import carbon_link, features, inventory
+from . import carbon_link, features, inventory, users
 from typing import Literal
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -25,10 +25,8 @@ def bootstrap_admin():
     if not digest:
         return
     with db(SYSTEM) as s:
-        s.execute("INSERT INTO accounts (id,username,company,password,role,active,created) VALUES (?,?,?,?,?,?,?) "
-                  "ON CONFLICT(username) DO NOTHING",
-                  (str(uuid.uuid4()), 'admin', 'Administración IVZ Sustainability Hub', digest, 'admin', True,
-                   datetime.now(timezone.utc).isoformat()))
+        if not s.execute("SELECT 1 FROM accounts WHERE username='admin'").fetchone():
+            users.create_account(s, 'admin', 'Administración IVZ Sustainability Hub', 'admin', digest)
 
 
 @asynccontextmanager
@@ -56,27 +54,50 @@ async def guard(request, call_next):
     return response
 
 
+IMPERSONATOR = 'Administrador de Invenzis'
+
+
 def account(request):
+    """The signed-in user: id and company are its account's (the tenant), username and access its own.
+
+    role is 'admin' for Invenzis' own account. A viewer can only read: its other requests stop here.
+    An administrator working inside a client's account has no user there and acts as its admin."""
     token = request.cookies.get('ivz_session', '')
     with db(SYSTEM) as s:
-        row = s.execute('SELECT a.id,a.username,a.company,a.role,a.active,t.impersonated_by FROM accounts a '
-                        'JOIN sessions t ON t.account=a.id WHERE t.token=? AND t.expires>?',
+        row = s.execute('SELECT a.id,a.company,a.role,a.active,t.impersonated_by,u.id AS user_id,u.username,'
+                        'u.role AS access,u.active AS user_active FROM sessions t JOIN accounts a ON a.id=t.account '
+                        'LEFT JOIN users u ON u.id=t.user_id AND u.account=t.account WHERE t.token=? AND t.expires>?',
                         (token_hash(token), time.time())).fetchone()
     if not row or not row['active']:
         raise HTTPException(401, 'Ingresá a tu cuenta')
-    return dict(row)
+    user = dict(row)
+    if user['impersonated_by']:
+        user.update(username=IMPERSONATOR, access='admin')
+    elif not user['user_id'] or not user['user_active']:
+        raise HTTPException(401, 'Ingresá a tu cuenta')
+    if user['access'] == 'viewer' and request.method not in ('GET', 'HEAD'):
+        raise HTTPException(403, 'Tu usuario es de solo lectura.')
+    return user
 
 
 def require_admin(request):
     user = account(request)
-    if user['role'] != 'admin':
+    if user['role'] != 'admin' or user['access'] != 'admin':
         raise HTTPException(403, 'Necesitás permisos de administrador.')
     return user
 
 
-def event(s, user, action):
-    s.execute('INSERT INTO events VALUES (?, ?, ?, ?)',
-              (str(uuid.uuid4()), user, action, datetime.now(timezone.utc).isoformat()))
+def company_admin(request):
+    """A user who manages the other users of its company."""
+    user = account(request)
+    if user['access'] != 'admin':
+        raise HTTPException(403, 'Solo un administrador de la empresa puede gestionar usuarios.')
+    return user
+
+
+def event(s, account_id, action, actor=None):
+    s.execute('INSERT INTO events (id,account,action,created,actor) VALUES (?,?,?,?,?)',
+              (str(uuid.uuid4()), account_id, action, datetime.now(timezone.utc).isoformat(), actor))
 
 
 class Login(BaseModel):
@@ -95,18 +116,22 @@ def login(body: Login, response: Response):
             'reset_at=CASE WHEN login_limits.reset_at<? THEN ? ELSE login_limits.reset_at END RETURNING attempts',
             (username, now+900, now, now, now+900)).fetchone()
         limited = row['attempts'] > 10
-        user = s.execute('SELECT * FROM accounts WHERE username=?', (username,)).fetchone()
+        user = s.execute('SELECT u.id,u.account,u.password,u.active,a.active AS account_active,a.company FROM users u '
+                         'JOIN accounts a ON a.id=u.account WHERE u.username=?', (username,)).fetchone()
     if limited:
         raise HTTPException(429, 'Demasiados intentos. Esperá 15 minutos.')
     valid = verify_password(body.password, user['password'] if user else DUMMY_PASSWORD)
     if not user or not valid:
         raise HTTPException(401, 'Usuario o contraseña incorrectos')
-    if not user['active']:
+    if not user['account_active']:
         raise HTTPException(403, 'Esta cuenta fue desactivada.')
+    if not user['active']:
+        raise HTTPException(403, 'Tu usuario fue desactivado. Pedile al administrador de tu empresa que lo reactive.')
     token = secrets.token_urlsafe(32)
     with db(SYSTEM) as s:
         s.execute('DELETE FROM sessions WHERE expires<?', (time.time(),))
-        s.execute('INSERT INTO sessions (token,account,expires) VALUES (?, ?, ?)', (token_hash(token), user['id'], time.time()+28800))
+        s.execute('INSERT INTO sessions (token,account,expires,user_id) VALUES (?,?,?,?)',
+                  (token_hash(token), user['account'], time.time()+28800, user['id']))
         s.execute('DELETE FROM login_limits WHERE username=?', (username,))
     response.set_cookie('ivz_session', token, httponly=True, secure=hosted() or os.getenv('COOKIE_SECURE') == '1',
                         samesite='strict', max_age=28800, path='/')
@@ -124,8 +149,8 @@ def logout(request: Request, response: Response):
 @app.get('/api/me')
 def me(request: Request):
     user = account(request)
-    return {'id': user['id'], 'username': user['username'], 'company': user['company'],
-            'role': user['role'], 'impersonating': bool(user.get('impersonated_by')), 'features': switches_of(user)}
+    return {'id': user['id'], 'username': user['username'], 'company': user['company'], 'role': user['role'],
+            'access': user['access'], 'impersonating': bool(user.get('impersonated_by')), 'features': switches_of(user)}
 
 
 def switches_of(user):
@@ -135,7 +160,8 @@ def switches_of(user):
 
 def session_info(user):
     return {'company': user['company'], 'username': user['username'], 'ai': bool(os.getenv('GEMINI_API_KEY')),
-            'role': user['role'], 'impersonating': bool(user.get('impersonated_by')), 'features': switches_of(user)}
+            'role': user['role'], 'access': user['access'], 'impersonating': bool(user.get('impersonated_by')),
+            'features': switches_of(user)}
 
 
 def section_user(request, section):
@@ -198,7 +224,7 @@ class StateChanges(BaseModel):
 def save_changes(body: StateChanges, request: Request):
     user = account(request)
     return inventory.save(user['id'], body.revision, catalogue=body.catalogue, changes=body.changes, order=body.order,
-                          batch=body.batch, parts=body.parts, on_saved=lambda s, _: event(s, user['id'], 'Datos guardados'))
+                          batch=body.batch, parts=body.parts, on_saved=lambda s, _: event(s, user['id'], 'Datos guardados', acting_as(user)))
 
 
 class StateBody(BaseModel):
@@ -209,7 +235,7 @@ class StateBody(BaseModel):
 @app.put('/api/state')
 def put_state(body: StateBody, request: Request):
     user = account(request)
-    return inventory.save(user['id'], body.revision, full=body.state, on_saved=lambda s, _: event(s, user['id'], 'Datos guardados'))
+    return inventory.save(user['id'], body.revision, full=body.state, on_saved=lambda s, _: event(s, user['id'], 'Datos guardados', acting_as(user)))
 
 
 class ReportBody(BaseModel):
@@ -247,7 +273,7 @@ async def generate_report(body: ReportBody, request: Request):
     with db(user['id']) as s:
         s.execute('INSERT INTO reports VALUES (?, ?, ?, ?)',
                   (report['id'], user['id'], json.dumps(report), report['meta']['generated']))
-        event(s, user['id'], 'Reporte generado: ' + report['id'])
+        event(s, user['id'], 'Reporte generado: ' + report['id'], acting_as(user))
     return report
 
 
@@ -297,7 +323,7 @@ def approve_report(report_id: str, body: dict, request: Request):
         result = s.execute('UPDATE reports SET body=? WHERE id=? AND account=? AND body=?', (json.dumps(original), report_id, user['id'], row['body']))
         if result.rowcount != 1:
             raise HTTPException(409, 'El reporte cambió. Volvé a abrirlo desde el historial.')
-        event(s, user['id'], 'Reporte guardado (' + original['meta']['status'] + '): ' + report_id)
+        event(s, user['id'], 'Reporte guardado (' + original['meta']['status'] + '): ' + report_id, acting_as(user))
     return original
 
 
@@ -323,7 +349,7 @@ async def regenerate(report_id: str, section_id: str, request: Request):
         result = s.execute('UPDATE reports SET body=? WHERE id=? AND account=? AND body=?', (json.dumps(report), report_id, user['id'], row['body']))
         if result.rowcount != 1:
             raise HTTPException(409, 'El reporte cambió durante la regeneración. Volvé a abrirlo.')
-        event(s, user['id'], 'Sección regenerada: ' + section_id)
+        event(s, user['id'], 'Sección regenerada: ' + section_id, acting_as(user))
     return report
 
 
@@ -331,7 +357,52 @@ async def regenerate(report_id: str, section_id: str, request: Request):
 def list_events(request: Request):
     user = account(request)
     with db(user['id']) as s:
-        return [dict(r) for r in s.execute('SELECT action, created FROM events WHERE account=? ORDER BY created DESC', (user['id'],)).fetchall()]
+        return [dict(r) for r in s.execute('SELECT action, created, actor FROM events WHERE account=? ORDER BY created DESC', (user['id'],)).fetchall()]
+
+
+# Users of the signed-in company, managed by its own administrators (backend/users.py).
+class UserCreate(BaseModel):
+    username: str = Field(min_length=1, max_length=150)
+    role: Literal['admin', 'editor', 'viewer']
+
+
+class UserChange(BaseModel):
+    role: Literal['admin', 'editor', 'viewer'] | None = None
+    active: bool | None = None
+
+
+@app.get('/api/users')
+def list_users(request: Request):
+    user = company_admin(request)
+    with db(user['id']) as s:
+        return users.listing(s, user['id'])
+
+
+@app.post('/api/users')
+def create_user(body: UserCreate, request: Request):
+    user = company_admin(request)
+    with db(user['id']) as s:
+        created, password = users.add(s, user['id'], body.username, body.role)
+        event(s, user['id'], f'Usuario creado: {created["username"]} ({body.role})', acting_as(user))
+    return {**created, 'password': password}
+
+
+@app.put('/api/users/{user_id}')
+def change_user(user_id: str, body: UserChange, request: Request):
+    user = company_admin(request)
+    with db(user['id']) as s:
+        changed = users.update(s, user['id'], user_id, body.role, body.active)
+        event(s, user['id'], f'Usuario {changed["username"]}: {changed["role"]}, {"activo" if changed["active"] else "desactivado"}', acting_as(user))
+    return changed
+
+
+@app.post('/api/users/{user_id}/reset-password')
+def reset_user_password(user_id: str, request: Request):
+    user = company_admin(request)
+    with db(user['id']) as s:
+        username, password = users.reset_password(s, user['id'], user_id)
+        event(s, user['id'], f'Contraseña reseteada: {username}', acting_as(user))
+    return {'password': password}
 
 
 def carbon_link_row(account_id):
@@ -443,14 +514,14 @@ class CloseYear(BaseModel):
 
 
 def acting_as(user):
-    return 'Administrador de Invenzis' if user.get('impersonated_by') else user['username']
+    return user['username']  # IMPERSONATOR when an administrator works inside the account
 
 
 @app.post('/api/closures')
 def close_year(body: CloseYear, request: Request):
     user = account(request)
     by = acting_as(user)
-    return inventory.close_year(user['id'], body.year, by, lambda s: event(s, user['id'], f'Año {body.year} cerrado por {by}'))
+    return inventory.close_year(user['id'], body.year, by, lambda s: event(s, user['id'], f'Año {body.year} cerrado por {by}', by))
 
 
 class ReopenYear(BaseModel):
@@ -464,7 +535,7 @@ def reopen_year(year: int, body: ReopenYear, request: Request):
     if not user.get('impersonated_by'):
         raise HTTPException(403, 'Solo un administrador puede reabrir un año cerrado.')
     return inventory.reopen_year(user['id'], year,
-                                 lambda s: event(s, user['id'], f'Año {year} reabierto por {acting_as(user)}. Motivo: {body.reason.strip()}'))
+                                 lambda s: event(s, user['id'], f'Año {year} reabierto por {acting_as(user)}. Motivo: {body.reason.strip()}', acting_as(user)))
 
 
 def disconnect_carbon_account(account_id, by=''):
@@ -486,6 +557,7 @@ def admin_list_accounts(request: Request):
         # Última actividad: the latest event of the account (saves, reports, syncs, year closings).
         rows = s.execute('SELECT a.id,a.username,a.company,a.role,a.active,a.created,'
                          '(SELECT MAX(e.created) FROM events e WHERE e.account=a.id) AS updated,'
+                         '(SELECT COUNT(*) FROM users u WHERE u.account=a.id AND u.active) AS users,'
                          '(SELECT COUNT(*) FROM state_rows r WHERE r.account=a.id) AS records FROM accounts a '
                          'ORDER BY a.created DESC, a.username').fetchall()
     return [dict(r) for r in rows]
@@ -499,30 +571,19 @@ class AdminAccountCreate(BaseModel):
 @app.post('/api/admin/accounts')
 def admin_create_account(body: AdminAccountCreate, request: Request):
     admin = require_admin(request)
-    name = body.username.strip().lower()
-    company = body.company.strip()
-    password = secrets.token_urlsafe(12)
-    account_id = str(uuid.uuid4())
     with db(SYSTEM) as s:
-        if s.execute('SELECT id FROM accounts WHERE username=?', (name,)).fetchone():
-            raise HTTPException(409, 'Ya existe una cuenta con ese usuario.')
-        s.execute('INSERT INTO accounts (id,username,company,password,role,active,created) VALUES (?,?,?,?,?,?,?)',
-                  (account_id, name, company, hash_password(password), 'client', True, datetime.now(timezone.utc).isoformat()))
-        event(s, admin['id'], f'Cuenta creada: {name} ({company})')
-    return {'id': account_id, 'username': name, 'company': company, 'password': password}
+        account_id, name, password = users.create_account(s, body.username, body.company)
+        event(s, admin['id'], f'Cuenta creada: {name} ({body.company.strip()})', admin['username'])
+    return {'id': account_id, 'username': name, 'company': body.company.strip(), 'password': password}
 
 
 @app.post('/api/admin/accounts/{account_id}/reset-password')
 def admin_reset_password(account_id: str, request: Request):
+    """The password of the account's first user (its id is the account's); other users have their own."""
     admin = require_admin(request)
-    password = secrets.token_urlsafe(12)
     with db(SYSTEM) as s:
-        target = s.execute('SELECT id,username FROM accounts WHERE id=?', (account_id,)).fetchone()
-        if not target:
-            raise HTTPException(404, 'Cuenta no encontrada.')
-        s.execute('UPDATE accounts SET password=? WHERE id=?', (hash_password(password), account_id))
-        s.execute('DELETE FROM sessions WHERE account=?', (account_id,))
-        event(s, admin['id'], f'Contraseña reseteada: {target["username"]}')
+        username, password = users.reset_password(s, account_id, account_id)
+        event(s, admin['id'], f'Contraseña reseteada: {username}', admin['username'])
     return {'password': password}
 
 
@@ -542,7 +603,7 @@ def admin_set_active(account_id: str, body: AdminSetActive, request: Request):
         s.execute('UPDATE accounts SET active=? WHERE id=?', (body.active, account_id))
         if not body.active:
             s.execute('DELETE FROM sessions WHERE account=?', (account_id,))
-        event(s, admin['id'], ('Cuenta desactivada: ' if not body.active else 'Cuenta reactivada: ') + target['username'])
+        event(s, admin['id'], ('Cuenta desactivada: ' if not body.active else 'Cuenta reactivada: ') + target['username'], admin['username'])
     return {'ok': True}
 
 
@@ -581,7 +642,7 @@ def admin_put_settings(account_id: str, body: AdminSettings, request: Request):
         target = admin_target(s, account_id)
         current = features.update(s, account_id, body.model_dump())
         changed = ', '.join(f'{k} {"activada" if on else "desactivada"}' for kind in ('sections', 'integrations') for k, on in getattr(body, kind).items())
-        event(s, admin['id'], f'Configuración de {target["username"]}: {changed}')
+        event(s, admin['id'], f'Configuración de {target["username"]}: {changed}', admin['username'])
     return features.catalogue(current)
 
 
@@ -598,8 +659,47 @@ def admin_set_company(account_id: str, body: AdminCompany, request: Request):
     with db(SYSTEM) as s:
         target = admin_target(s, account_id)
         s.execute('UPDATE accounts SET company=? WHERE id=?', (company, account_id))
-        event(s, admin['id'], f'Empresa de {target["username"]}: {company}')
+        event(s, admin['id'], f'Empresa de {target["username"]}: {company}', admin['username'])
     return {'company': company}
+
+
+@app.get('/api/admin/accounts/{account_id}/users')
+def admin_list_users(account_id: str, request: Request):
+    require_admin(request)
+    with db(SYSTEM) as s:
+        admin_target(s, account_id)
+        return users.listing(s, account_id)
+
+
+@app.post('/api/admin/accounts/{account_id}/users')
+def admin_create_user(account_id: str, body: UserCreate, request: Request):
+    admin = require_admin(request)
+    with db(SYSTEM) as s:
+        target = admin_target(s, account_id)
+        created, password = users.add(s, account_id, body.username, body.role)
+        event(s, admin['id'], f'Usuario creado en {target["username"]}: {created["username"]} ({body.role})', admin['username'])
+    return {**created, 'password': password}
+
+
+@app.put('/api/admin/accounts/{account_id}/users/{user_id}')
+def admin_change_user(account_id: str, user_id: str, body: UserChange, request: Request):
+    admin = require_admin(request)
+    with db(SYSTEM) as s:
+        target = admin_target(s, account_id)
+        changed = users.update(s, account_id, user_id, body.role, body.active)
+        event(s, admin['id'], f'Usuario {changed["username"]} de {target["username"]}: {changed["role"]}, '
+                              f'{"activo" if changed["active"] else "desactivado"}', admin['username'])
+    return changed
+
+
+@app.post('/api/admin/accounts/{account_id}/users/{user_id}/reset-password')
+def admin_reset_user_password(account_id: str, user_id: str, request: Request):
+    admin = require_admin(request)
+    with db(SYSTEM) as s:
+        admin_target(s, account_id)
+        username, password = users.reset_password(s, account_id, user_id)
+        event(s, admin['id'], f'Contraseña reseteada: {username}', admin['username'])
+    return {'password': password}
 
 
 def admin_carbon_target(request, account_id):
@@ -615,7 +715,7 @@ async def admin_connect_carbon(account_id: str, body: CarbonConnectBody, request
     admin, target = admin_carbon_target(request, account_id)
     await connect_carbon_account(account_id, body.token, ' por el administrador')
     with db(SYSTEM) as s:
-        event(s, admin['id'], f'IVZ Carbon conectado para {target["username"]}')
+        event(s, admin['id'], f'IVZ Carbon conectado para {target["username"]}', admin['username'])
     return admin_carbon_status(account_id)
 
 
@@ -633,7 +733,7 @@ def admin_disconnect_carbon(account_id: str, request: Request):
         target = admin_target(s, account_id)
     disconnect_carbon_account(account_id, ' por el administrador')
     with db(SYSTEM) as s:
-        event(s, admin['id'], f'IVZ Carbon desconectado para {target["username"]}')
+        event(s, admin['id'], f'IVZ Carbon desconectado para {target["username"]}', admin['username'])
     return admin_carbon_status(account_id)
 
 
@@ -647,7 +747,7 @@ def admin_impersonate(account_id: str, request: Request, response: Response):
         token = secrets.token_urlsafe(32)
         s.execute('INSERT INTO sessions (token,account,expires,impersonated_by) VALUES (?,?,?,?)',
                   (token_hash(token), account_id, time.time()+28800, admin['id']))
-        event(s, admin['id'], f'Entró como: {target["username"]}')
+        event(s, admin['id'], f'Entró como: {target["username"]}', admin['username'])
     secure = hosted() or os.getenv('COOKIE_SECURE') == '1'
     response.set_cookie('ivz_admin_return', request.cookies.get('ivz_session', ''),
                         httponly=True, samesite='strict', secure=secure, max_age=28800, path='/')
@@ -661,7 +761,8 @@ def admin_return(request: Request, response: Response):
     if not return_token:
         raise HTTPException(400, 'No hay una sesión de administrador para volver.')
     with db(SYSTEM) as s:
-        row = s.execute('SELECT a.id,a.role FROM accounts a JOIN sessions t ON t.account=a.id WHERE t.token=? AND t.expires>?',
+        row = s.execute("SELECT a.id,a.role FROM accounts a JOIN sessions t ON t.account=a.id JOIN users u ON u.id=t.user_id "
+                        "WHERE t.token=? AND t.expires>? AND a.active AND u.active AND u.role='admin'",
                         (token_hash(return_token), time.time())).fetchone()
     if not row or row['role'] != 'admin':
         response.delete_cookie('ivz_admin_return', path='/')
@@ -714,6 +815,11 @@ def carbon_integration_ui():
 @app.get('/globe.js')
 def globe_js():
     return FileResponse(ROOT / 'globe.js', media_type='text/javascript', headers={'Cache-Control': 'no-store, max-age=0'})
+
+
+@app.get('/users-ui.js')
+def users_ui():
+    return FileResponse(ROOT / 'users-ui.js', media_type='text/javascript', headers={'Cache-Control': 'no-store, max-age=0'})
 
 
 @app.get('/map-ui.js')

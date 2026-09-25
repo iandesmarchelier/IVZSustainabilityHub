@@ -121,6 +121,9 @@ def initialize():
             'CREATE TABLE IF NOT EXISTS year_closures (account TEXT NOT NULL, year INTEGER NOT NULL, closed_at TEXT NOT NULL, closed_by TEXT NOT NULL, PRIMARY KEY(account,year))',
             'CREATE TABLE IF NOT EXISTS state_backups (account TEXT NOT NULL, created TEXT NOT NULL, revision INTEGER NOT NULL, body TEXT NOT NULL)',
             'CREATE TABLE IF NOT EXISTS state_uploads (account TEXT NOT NULL, batch TEXT NOT NULL, part INTEGER NOT NULL, created DOUBLE PRECISION NOT NULL, body TEXT NOT NULL, PRIMARY KEY(account,batch,part))',
+            # The people who sign in to each account (backend/users.py).
+            'CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, account TEXT NOT NULL, username TEXT UNIQUE NOT NULL, password TEXT NOT NULL, role TEXT NOT NULL, active BOOLEAN NOT NULL DEFAULT TRUE, created TEXT NOT NULL)',
+            'CREATE INDEX IF NOT EXISTS users_account ON users(account)',
         ]:
             s.execute(sql)
         _ensure_column(s, 'accounts', 'role', "role TEXT NOT NULL DEFAULT 'client'")
@@ -129,6 +132,14 @@ def initialize():
         # Sections and integrations an administrator switched on or off for the account (backend/features.py).
         _ensure_column(s, 'accounts', 'settings', "settings TEXT NOT NULL DEFAULT '{}'")
         _ensure_column(s, 'sessions', 'impersonated_by', 'impersonated_by TEXT')
+        _ensure_column(s, 'sessions', 'user_id', 'user_id TEXT')
+        _ensure_column(s, 'events', 'actor', 'actor TEXT')
+        # Accounts from before users existed: their login becomes the first administrator, with the
+        # account's id, and their open sessions belong to it. Users are never deleted, so this adds
+        # nothing once done.
+        s.execute("INSERT INTO users (id,account,username,password,role,active,created) "
+                  "SELECT id,id,username,password,'admin',TRUE,created FROM accounts WHERE TRUE ON CONFLICT DO NOTHING")
+        s.execute('UPDATE sessions SET user_id=account WHERE user_id IS NULL AND impersonated_by IS NULL')
         if s.postgres:
             isolate(s, 'accounts')
 

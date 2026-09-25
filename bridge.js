@@ -110,7 +110,8 @@ async function loadState() {
 
 /* Closed years: their measures and actuals cannot be edited until an administrator reopens them.
    The server enforces it; the screen undoes such an edit right away instead of failing to save. */
-let closures = [], closedYears = new Set(), impersonating = false;
+let closures = [], closedYears = new Set(), impersonating = false, access = 'admin';
+const readOnly = () => access === 'viewer';
 async function loadClosures() { closures = await api('closures'); closedYears = new Set(closures.map(c => c.year)); }
 
 function enforceClosed() {
@@ -141,7 +142,7 @@ function renderYears(w) {
       const c = byYear[y];
       return '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:7px 0;border-top:1px solid var(--line)"><span><b>' + y + '</b> · ' +
         (c ? 'Cerrado el ' + esc(new Date(c.closedAt).toLocaleDateString('es')) + ' por ' + esc(c.closedBy) : 'Abierto') + '</span>' +
-        (c ? (impersonating ? '<button class="btn" data-reopen="' + y + '">Reabrir</button>' : '') : '<button class="btn" data-close="' + y + '">Cerrar año</button>') + '</div>';
+        (readOnly() ? '' : c ? (impersonating ? '<button class="btn" data-reopen="' + y + '">Reabrir</button>' : '') : '<button class="btn" data-close="' + y + '">Cerrar año</button>') + '</div>';
     }).join('') + '<p id="years-error" role="alert" style="color:var(--bad);min-height:18px;margin:6px 0 0"></p>';
   box.querySelectorAll('[data-close]').forEach(b => b.onclick = () => closeYear(+b.dataset.close, b, w));
   box.querySelectorAll('[data-reopen]').forEach(b => b.onclick = () => reopenYear(+b.dataset.reopen, b, w));
@@ -163,8 +164,26 @@ async function reopenYear(year, button, w) {
   catch (e) { button.disabled = false; w.querySelector('#years-error').textContent = e.message; }
 }
 
+// What the server has, rebuilt from the baseline of the last load or save.
+function savedState() {
+  const st = JSON.parse(savedBase.rest);
+  for (const kind of ROW_KINDS) st[kind] = savedBase.ids[kind].map(id => JSON.parse(savedBase.rows[kind].get(id)));
+  return st;
+}
+
+// A viewer can look but not change: an edit on screen is undone instead of being sent (the server refuses it anyway).
+function undoForViewer() {
+  if (!stateDiff().any) return;
+  const saved = savedState();
+  for (const key of Object.keys(appState)) delete appState[key];
+  Object.assign(appState, saved);
+  destroyCharts(); render();
+  toast('Tu usuario es de solo lectura: los cambios no se guardan.', 'warn');
+}
+
 async function persist() {
   if (!persistenceReady) return;
+  if (readOnly()) return undoForViewer();
   if (saving) { await saving; return persist(); }
   enforceClosed();
   const {any, out, next} = stateDiff();
@@ -187,7 +206,7 @@ function showLogin(message = '') {
   screen.style.cssText = 'position:fixed;inset:0;background:var(--bg);color:var(--ink);font:16px system-ui;z-index:99999;display:grid;place-items:center';
   screen.innerHTML = '<main style="background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:44px;width:min(440px,94vw);box-shadow:var(--sh-lg)">' +
     '<h1 style="margin:0 0 8px;font-size:26px">IVZ Sustainability Hub</h1><p style="color:var(--ink-2);line-height:1.5;margin:0">Sistema Tenant Invenzis</p>' +
-    '<form><label style="display:block;margin-top:20px">Usuario de empresa<input name="username" autocomplete="username" required style="font:inherit;width:100%;padding:12px;border-radius:8px;border:1px solid var(--line-2);margin-top:8px"></label>' +
+    '<form><label style="display:block;margin-top:20px">Usuario<input name="username" autocomplete="username" required style="font:inherit;width:100%;padding:12px;border-radius:8px;border:1px solid var(--line-2);margin-top:8px"></label>' +
     '<label style="display:block;margin-top:20px">Contraseña<input type="password" name="password" autocomplete="current-password" required style="font:inherit;width:100%;padding:12px;border-radius:8px;border:1px solid var(--line-2);margin-top:8px"></label>' +
     '<p id="login-error" role="alert" style="color:var(--bad);min-height:24px;margin:8px 0 0"></p>' +
     '<button type="submit" style="font:inherit;width:100%;padding:12px;border-radius:8px;border:0;background:var(--accent);color:white;cursor:pointer;margin-top:8px">Ingresar</button></form></main>';
@@ -232,6 +251,7 @@ function showImpersonationBar() {
 async function boot() {
   const data = await loadState();
   impersonating = !!data.impersonating;
+  access = data.access || 'viewer';
   if (data.state) await loadClosures();
   if (data.role === 'admin' && !data.impersonating) { location.replace('/admin'); return; }
   aiAvailable = data.ai;
@@ -250,11 +270,13 @@ async function boot() {
   // One general template in this demo. Other frameworks are future work.
   appState.integrations.forEach(i => { if (i.id !== 'INT-XLS') { i.status = 'Not configured'; i.records = 0; i.lastSync = '—'; } });
   serverRevision = data.revision;
-  savedBase = base;
-  persistenceReady = true;
+  // A viewer's baseline is what it sees after loading, so nothing of its own counts as a change.
+  savedBase = readOnly() ? stateDiff(appState, true).next : base;
+  persistenceReady = !(readOnly() && !data.state);
+  if (readOnly()) document.getElementById('profile-company').textContent = data.company + ' · Solo lectura';
   destroyCharts(); render();
   document.getElementById('boot-gate')?.remove();
-  if (energyMigrated) persist().catch(e => toast(e.message, 'bad'));
+  if (energyMigrated && !readOnly()) persist().catch(e => toast(e.message, 'bad'));
   await persist();
 }
 
@@ -305,10 +327,14 @@ filterActuals = function (st, metricId, opts) {
 };
 openUserMenu = () => modal({
   title: 'Configuración de la cuenta', icon: 'settings',
-  body: '<dl class="kv"><dt>Usuario</dt><dd>' + esc(CONFIG.USER.name) + '</dd><dt>Organización</dt><dd>' + esc(CONFIG.USER.role) + '</dd></dl><div id="account-years"></div>',
+  body: '<dl class="kv"><dt>Usuario</dt><dd>' + esc(CONFIG.USER.name) + '</dd><dt>Organización</dt><dd>' + esc(CONFIG.USER.role) + '</dd>' +
+    '<dt>Rol</dt><dd>' + esc(IVZUsers.ROLES[access] || access) + '</dd></dl><div id="account-years"></div>' +
+    (access === 'admin' ? '<h4 style="margin:18px 0 4px">Usuarios de la empresa</h4><div id="account-users"></div>' : ''),
   footer: '<button class="btn" data-close>Volver</button><button class="btn" id="account-logout"><i data-lucide="log-out"></i>Cerrar sesión</button>',
   onMount: w => {
     renderYears(w);
+    const people = w.querySelector('#account-users');
+    if (people) IVZUsers.mount(people, {base: '/api/users', headers: {'X-IVZ-Request': '1'}, me: CONFIG.USER.name});
     w.querySelector('#account-logout').onclick = async event => {
       const button = event.currentTarget; button.disabled = true;
       try { await persist(); await api('logout', 'POST'); persistenceReady = false; location.reload(); }

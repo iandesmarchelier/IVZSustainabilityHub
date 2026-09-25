@@ -16,9 +16,11 @@ def main():
             print('La cuenta demo ya existe. Ver data/acceso-demo.txt.')
             return
         password = secrets.token_urlsafe(18)
+        now = datetime.now(timezone.utc).isoformat()
         s.execute('INSERT INTO accounts (id,username,company,password,role,active,created) VALUES (?,?,?,?,?,?,?)',
-                  ('demo-local', 'demo', 'Tenant Invenzis', hash_password(password), 'client', True,
-                   datetime.now(timezone.utc).isoformat()))
+                  ('demo-local', 'demo', 'Tenant Invenzis', hash_password(password), 'client', True, now))
+        s.execute('INSERT INTO users (id,account,username,password,role,active,created) VALUES (?,?,?,?,?,?,?)',
+                  ('demo-local', 'demo-local', 'demo', hash_password(password), 'admin', True, now))
     Path('data/acceso-demo.txt').write_text('Usuario: demo\nContraseña: ' + password + '\nSólo para esta demo local.\n', encoding='utf8')
     print('Cuenta local creada. Acceso en data/acceso-demo.txt (excluido de Git).')
 

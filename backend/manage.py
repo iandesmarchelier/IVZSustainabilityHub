@@ -1,10 +1,9 @@
 """Run: python -m backend.manage USERNAME 'Company name'."""
 import getpass
 import sys
-import uuid
-from datetime import datetime, timezone
 from .storage import SYSTEM, initialize, db
 from .security import hash_password
+from .users import create_account
 
 
 def main():
@@ -15,10 +14,8 @@ def main():
         raise SystemExit('Contraseña corta o confirmación diferente.')
     initialize()
     with db(SYSTEM) as s:
-        s.execute('INSERT INTO accounts (id,username,company,password,role,active,created) VALUES (?,?,?,?,?,?,?)',
-                  (str(uuid.uuid4()), sys.argv[1].strip().lower(), sys.argv[2], hash_password(password),
-                   'client', True, datetime.now(timezone.utc).isoformat()))
-    print('Cuenta creada. Un usuario corresponde a una empresa. Ahora también se pueden crear cuentas desde /admin.')
+        create_account(s, sys.argv[1], sys.argv[2], 'client', hash_password(password))
+    print('Cuenta creada con su primer usuario, administrador de la empresa. Los demás usuarios se agregan desde /admin o desde la cuenta.')
 
 
 if __name__ == '__main__':
